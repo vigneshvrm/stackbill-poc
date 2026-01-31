@@ -163,8 +163,9 @@ rabbitmq:
 # --------------------------------------------
 nfs:
   # Use internal NFS provisioner for POC
+  # Disabled by default - requires external NFS server
   provisioner:
-    enabled: true
+    enabled: false
 
   # Storage configuration
   storage:
