@@ -1,0 +1,96 @@
+================================================================================
+     _____ _             _    ____  _ _ _
+    / ____| |           | |  |  _ \(_) | |
+   | (___ | |_ __ _  ___| | _| |_) |_| | |
+    \___ \| __/ _` |/ __| |/ /  _ <| | | |
+    ____) | || (_| | (__|   <| |_) | | | |
+   |_____/ \__\__,_|\___|_|\_\____/|_|_|_|
+
+   POC / Sandbox Installation
+================================================================================
+
+Thank you for installing {{ .Chart.Name }}!
+
+Release:    {{ .Release.Name }}
+Namespace:  {{ .Release.Namespace }}
+Mode:       {{ .Values.global.mode | upper }}
+
+================================================================================
+AUTO-PROVISIONED SERVICES
+================================================================================
+
+{{- if .Values.mysql.enabled }}
+MySQL:
+  Service: {{ .Release.Name }}-mysql
+  Port:    3306
+  Database: {{ .Values.mysql.auth.database }}
+{{- end }}
+
+{{- if .Values.mongodb.enabled }}
+MongoDB:
+  Service: {{ .Release.Name }}-mongodb
+  Port:    27017
+  Database: {{ .Values.mongodb.auth.database }}
+{{- end }}
+
+{{- if .Values.rabbitmq.enabled }}
+RabbitMQ:
+  Service: {{ .Release.Name }}-rabbitmq
+  Port:    5672
+  Management: 15672
+{{- end }}
+
+================================================================================
+ACCESS STACKBILL
+================================================================================
+
+{{- if .Values.domain.name }}
+Portal URL: https://{{ .Values.domain.name }}
+{{- else }}
+
+1. Get the Istio Ingress Gateway IP:
+   kubectl get svc istio-ingressgateway -n istio-system
+
+2. Or use port-forward:
+   kubectl port-forward svc/sb-deployment-controller 8080:80 -n {{ .Release.Namespace }}
+   Then open: http://localhost:8080
+{{- end }}
+
+================================================================================
+VERIFY INSTALLATION
+================================================================================
+
+# Check all pods are running
+kubectl get pods -n {{ .Release.Namespace }}
+
+# View deployment controller logs
+kubectl logs -f -l app=sb-deployment-controller -n {{ .Release.Namespace }}
+
+# Check services
+kubectl get svc -n {{ .Release.Namespace }}
+
+================================================================================
+CREDENTIALS
+================================================================================
+
+Credentials were auto-generated and saved to:
+  - Linux/Mac: ~/stackbill-poc-credentials.txt
+  - Windows:   %USERPROFILE%\stackbill-poc-credentials.txt
+
+Or retrieve from Kubernetes secret:
+  kubectl get secret stackbill-auto-credentials -n {{ .Release.Namespace }} -o yaml
+
+================================================================================
+UNINSTALL
+================================================================================
+
+# Keep data
+helm uninstall {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+# Delete everything including data
+./scripts/uninstall.sh -n {{ .Release.Namespace }} -r {{ .Release.Name }} --delete-pvc
+
+================================================================================
+
+For documentation: https://docs.stackbill.com
+For support: support@stackbill.com

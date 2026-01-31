@@ -1,0 +1,38 @@
+# Patterns to ignore when building packages
+.git
+.gitignore
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Documentation (not needed in chart)
+docs/
+
+# Distribution
+dist/
+
+# Scripts (distributed separately)
+scripts/*.bat
+
+# Testing
+tests/
+*.test.yaml
+
+# Local development
+.env
+.env.local
+*.local.yaml

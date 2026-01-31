@@ -1,0 +1,216 @@
+# ============================================
+# STACKBILL POC INSTALLER - VALUES
+# ============================================
+# For POC/Sandbox: User provides ONLY domain + SSL
+# Everything else is auto-provisioned
+# ============================================
+
+# --------------------------------------------
+# GLOBAL SETTINGS
+# --------------------------------------------
+global:
+  # POC mode - enables all auto-provisioning
+  mode: poc  # poc | production
+
+  # Namespace for all components
+  namespace: sb-system
+
+  # Storage class (auto-detected if empty)
+  storageClass: ""
+
+# --------------------------------------------
+# USER INPUT (REQUIRED FOR POC)
+# --------------------------------------------
+# Only these values need to be provided by user
+domain:
+  # Domain name for StackBill portal
+  name: ""  # e.g., stackbill.example.com
+
+ssl:
+  # SSL Certificate (base64 encoded or path)
+  certificate: ""
+  # SSL Private Key (base64 encoded or path)
+  privateKey: ""
+  # CA Bundle (optional, base64 encoded)
+  caBundle: ""
+
+# --------------------------------------------
+# DEPLOYMENT CONTROLLER (UI WIZARD)
+# --------------------------------------------
+deploymentController:
+  enabled: true
+
+# Pass-through values to sb-deployment-controller subchart
+sb-deployment-controller:
+  namespace:
+    name: sb-system
+  deployment:
+    replicaCount: 1
+    image:
+      repository: assistanzhub/sb-deployment-controller
+      pullPolicy: Always
+      tag: "v1.1.7"
+
+# --------------------------------------------
+# MYSQL - AUTO-PROVISIONED
+# --------------------------------------------
+mysql:
+  enabled: true
+
+  # Auto-generated credentials for POC
+  auth:
+    rootPassword: ""  # Auto-generated if empty
+    database: stackbill
+    username: stackbill
+    password: ""  # Auto-generated if empty
+
+  # Initialization scripts - creates DBs, users, tables
+  initdbScriptsConfigMap: stackbill-mysql-init
+
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+    configuration: |-
+      [mysqld]
+      default_authentication_plugin=mysql_native_password
+      max_connections=200
+      character-set-server=utf8mb4
+      collation-server=utf8mb4_unicode_ci
+
+# --------------------------------------------
+# MONGODB - AUTO-PROVISIONED
+# --------------------------------------------
+mongodb:
+  enabled: true
+
+  auth:
+    enabled: true
+    rootPassword: ""  # Auto-generated if empty
+    database: stackbill_usage
+    username: stackbill
+    password: ""  # Auto-generated if empty
+
+  # Initialization scripts - creates collections, indexes
+  initdbScriptsConfigMap: stackbill-mongodb-init
+
+  persistence:
+    enabled: true
+    size: 20Gi
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# --------------------------------------------
+# RABBITMQ - AUTO-PROVISIONED
+# --------------------------------------------
+rabbitmq:
+  enabled: true
+
+  auth:
+    username: stackbill
+    password: ""  # Auto-generated if empty
+    erlangCookie: ""  # Auto-generated if empty
+
+  persistence:
+    enabled: true
+    size: 10Gi
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Enable management plugin
+  plugins: "rabbitmq_management rabbitmq_peer_discovery_k8s"
+
+  # Extra configuration for vhost and permissions
+  extraConfiguration: |-
+    ## Default vhost
+    default_vhost = /
+    ## Default user permissions on default vhost
+    default_permissions.configure = .*
+    default_permissions.read = .*
+    default_permissions.write = .*
+
+  # Load definitions to create vhosts, users, permissions, queues
+  loadDefinition:
+    enabled: true
+    existingSecret: stackbill-rabbitmq-definitions
+
+  # Community plugins if needed
+  communityPlugins: ""
+
+# --------------------------------------------
+# NFS - AUTO-PROVISIONED
+# --------------------------------------------
+nfs:
+  # Use internal NFS provisioner for POC
+  provisioner:
+    enabled: true
+
+  # Storage configuration
+  storage:
+    size: 50Gi
+    path: /data/stackbill
+
+# NFS Subdir External Provisioner settings
+nfs-provisioner:
+  nfs:
+    server: ""  # Set if using external NFS
+    path: /data
+  storageClass:
+    name: stackbill-nfs
+    defaultClass: false
+    reclaimPolicy: Retain
+
+# --------------------------------------------
+# ISTIO CONFIGURATION
+# --------------------------------------------
+istio:
+  enabled: true
+
+  gateway:
+    name: sb-nginx-gateway
+
+  ingressGateway:
+    # LoadBalancer IP (optional)
+    loadBalancerIP: ""
+
+# --------------------------------------------
+# AUTO-GENERATION SETTINGS
+# --------------------------------------------
+autoGenerate:
+  # Auto-generate passwords if not provided
+  passwords: true
+  # Password length
+  passwordLength: 16
+  # Use alphanumeric only
+  alphanumericOnly: true
+
+# --------------------------------------------
+# POC RESOURCE LIMITS
+# --------------------------------------------
+poc:
+  # Limit total resources for POC
+  resources:
+    totalCPU: "8"
+    totalMemory: "16Gi"
+    totalStorage: "200Gi"

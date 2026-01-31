@@ -1,0 +1,55 @@
+apiVersion: v2
+name: stackbill-poc
+description: StackBill POC/Sandbox Installer - All-in-One Deployment
+type: application
+version: 1.0.0
+appVersion: "2024.1"
+
+keywords:
+  - stackbill
+  - cloudstack
+  - cloud-management
+  - poc
+  - sandbox
+
+home: https://www.stackbill.com
+
+maintainers:
+  - name: StackBill Team
+    email: support@stackbill.com
+
+# Dependencies - Auto-provisioned for POC
+dependencies:
+  # Deployment Controller (UI Wizard)
+  - name: sb-deployment-controller
+    version: "0.1.0"
+    repository: "file://./charts/sb-deployment-controller"
+    condition: deploymentController.enabled
+
+  # MySQL - Auto-provisioned
+  - name: mysql
+    version: "9.14.1"
+    repository: https://charts.bitnami.com/bitnami
+    condition: mysql.enabled
+    alias: mysql
+
+  # MongoDB - Auto-provisioned
+  - name: mongodb
+    version: "14.3.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: mongodb.enabled
+    alias: mongodb
+
+  # RabbitMQ - Auto-provisioned
+  - name: rabbitmq
+    version: "12.5.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: rabbitmq.enabled
+    alias: rabbitmq
+
+  # NFS Provisioner - Auto-provisioned
+  - name: nfs-subdir-external-provisioner
+    version: "4.0.18"
+    repository: https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+    condition: nfs.provisioner.enabled
+    alias: nfs-provisioner

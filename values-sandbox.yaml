@@ -1,0 +1,113 @@
+# ============================================
+# STACKBILL HELM CHART - SANDBOX VALUES
+# ============================================
+# Lightweight configuration for POC/Demo
+# Use: helm install stackbill . -f values-sandbox.yaml
+# ============================================
+
+global:
+  environment: sandbox
+  storageClass: "standard"
+
+# Minimal StackBill configuration
+stackbill:
+  replicaCount: 1
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+
+  config:
+    logLevel: DEBUG
+    debug: true
+
+# Simple ingress without TLS
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: stackbill.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    enabled: false
+
+# Disable Istio for sandbox
+istio:
+  enabled: false
+
+# Minimal MySQL
+mysql:
+  enabled: true
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+# Minimal MongoDB
+mongodb:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+# Minimal RabbitMQ
+rabbitmq:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# Reduced storage
+persistence:
+  enabled: true
+  size: 20Gi
+  nfs:
+    enabled: false
+
+# Disable autoscaling
+autoscaling:
+  enabled: false
+
+# Disable PDB
+podDisruptionBudget:
+  enabled: false
+
+# Disable monitoring
+monitoring:
+  enabled: false
+
+# Relaxed security for sandbox
+security:
+  podSecurityContext:
+    runAsNonRoot: false
+  networkPolicy:
+    enabled: false

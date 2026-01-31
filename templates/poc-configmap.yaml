@@ -1,0 +1,43 @@
+{{- if eq .Values.global.mode "poc" }}
+# POC Configuration - Pre-configured settings for sandbox deployment
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stackbill-poc-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: stackbill
+    app.kubernetes.io/component: config
+    app.kubernetes.io/mode: poc
+data:
+  # Mode
+  DEPLOYMENT_MODE: "poc"
+  AUTO_PROVISION: "true"
+
+  # MySQL Service Details (auto-provisioned)
+  MYSQL_SERVICE_NAME: "{{ .Release.Name }}-mysql"
+  MYSQL_SERVICE_PORT: "3306"
+
+  # MongoDB Service Details (auto-provisioned)
+  MONGODB_SERVICE_NAME: "{{ .Release.Name }}-mongodb"
+  MONGODB_SERVICE_PORT: "27017"
+
+  # RabbitMQ Service Details (auto-provisioned)
+  RABBITMQ_SERVICE_NAME: "{{ .Release.Name }}-rabbitmq"
+  RABBITMQ_SERVICE_PORT: "5672"
+  RABBITMQ_MGMT_PORT: "15672"
+
+  # NFS Details
+  NFS_STORAGE_CLASS: "{{ (index .Values "nfs-provisioner").storageClass.name }}"
+
+  # Domain
+  STACKBILL_DOMAIN: "{{ .Values.domain.name }}"
+
+  # Istio Gateway
+  ISTIO_GATEWAY: "{{ .Values.istio.gateway.name }}"
+
+  # Resource Limits for POC
+  POC_TOTAL_CPU: "{{ .Values.poc.resources.totalCPU }}"
+  POC_TOTAL_MEMORY: "{{ .Values.poc.resources.totalMemory }}"
+  POC_TOTAL_STORAGE: "{{ .Values.poc.resources.totalStorage }}"
+{{- end }}
