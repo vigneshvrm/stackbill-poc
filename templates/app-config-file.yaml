@@ -1,0 +1,114 @@
+{{- if eq .Values.global.mode "poc" }}
+# Application configuration file for sb-deployment-controller
+# This ConfigMap provides a JSON config file that can be mounted into the container
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stackbill-app-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: stackbill
+    app.kubernetes.io/component: app-config
+    app.kubernetes.io/mode: poc
+data:
+  # JSON configuration file for the application
+  config.json: |
+    {
+      "autoConfig": true,
+      "skipWizard": true,
+      {{- if .Values.mysql.enabled }}
+      "mysql": {
+        "host": "{{ .Release.Name }}-mysql",
+        "port": 3306,
+        "database": "{{ .Values.mysql.auth.database }}",
+        "username": "{{ .Values.mysql.auth.username }}",
+        "password": "{{ .Values.mysql.auth.password }}"
+      },
+      {{- else if .Values.external.mysql.host }}
+      "mysql": {
+        "host": "{{ .Values.external.mysql.host }}",
+        "port": {{ .Values.external.mysql.port | default 3306 }},
+        "database": "{{ .Values.external.mysql.database | default "stackbill" }}",
+        "username": "{{ .Values.external.mysql.username | default "stackbill" }}",
+        "password": "{{ .Values.external.mysql.password }}"
+      },
+      {{- end }}
+      {{- if .Values.mongodb.enabled }}
+      "mongodb": {
+        "host": "{{ .Release.Name }}-mongodb",
+        "port": 27017,
+        "database": "{{ .Values.mongodb.auth.database }}",
+        "username": "{{ .Values.mongodb.auth.username }}",
+        "password": "{{ .Values.mongodb.auth.password }}"
+      },
+      {{- else if .Values.external.mongodb.host }}
+      "mongodb": {
+        "host": "{{ .Values.external.mongodb.host }}",
+        "port": {{ .Values.external.mongodb.port | default 27017 }},
+        "database": "{{ .Values.external.mongodb.database | default "stackbill_usage" }}",
+        "username": "{{ .Values.external.mongodb.username | default "stackbill" }}",
+        "password": "{{ .Values.external.mongodb.password }}"
+      },
+      {{- end }}
+      {{- if .Values.rabbitmq.enabled }}
+      "rabbitmq": {
+        "host": "{{ .Release.Name }}-rabbitmq",
+        "port": 5672,
+        "username": "{{ .Values.rabbitmq.auth.username }}",
+        "password": "{{ .Values.rabbitmq.auth.password }}"
+      },
+      {{- else if .Values.external.rabbitmq.host }}
+      "rabbitmq": {
+        "host": "{{ .Values.external.rabbitmq.host }}",
+        "port": {{ .Values.external.rabbitmq.port | default 5672 }},
+        "username": "{{ .Values.external.rabbitmq.username | default "stackbill" }}",
+        "password": "{{ .Values.external.rabbitmq.password }}"
+      },
+      {{- end }}
+      {{- if .Values.external.nfs.server }}
+      "nfs": {
+        "server": "{{ .Values.external.nfs.server }}",
+        "path": "{{ .Values.external.nfs.path | default "/data/stackbill" }}"
+      },
+      {{- else }}
+      "nfs": {
+        "server": "{{ .Release.Name }}-nfs",
+        "path": "{{ .Values.nfs.storage.path }}"
+      },
+      {{- end }}
+      "domain": "{{ .Values.domain.name }}"
+    }
+
+  # Environment file for alternative loading
+  .env: |
+    AUTO_CONFIG=true
+    SKIP_WIZARD=true
+    {{- if .Values.mysql.enabled }}
+    MYSQL_HOST={{ .Release.Name }}-mysql
+    {{- else if .Values.external.mysql.host }}
+    MYSQL_HOST={{ .Values.external.mysql.host }}
+    {{- end }}
+    MYSQL_PORT={{ .Values.external.mysql.port | default 3306 }}
+    MYSQL_DATABASE={{ .Values.external.mysql.database | default "stackbill" }}
+    MYSQL_USERNAME={{ .Values.external.mysql.username | default "stackbill" }}
+    {{- if .Values.mongodb.enabled }}
+    MONGODB_HOST={{ .Release.Name }}-mongodb
+    {{- else if .Values.external.mongodb.host }}
+    MONGODB_HOST={{ .Values.external.mongodb.host }}
+    {{- end }}
+    MONGODB_PORT={{ .Values.external.mongodb.port | default 27017 }}
+    MONGODB_DATABASE={{ .Values.external.mongodb.database | default "stackbill_usage" }}
+    MONGODB_USERNAME={{ .Values.external.mongodb.username | default "stackbill" }}
+    {{- if .Values.rabbitmq.enabled }}
+    RABBITMQ_HOST={{ .Release.Name }}-rabbitmq
+    {{- else if .Values.external.rabbitmq.host }}
+    RABBITMQ_HOST={{ .Values.external.rabbitmq.host }}
+    {{- end }}
+    RABBITMQ_PORT={{ .Values.external.rabbitmq.port | default 5672 }}
+    RABBITMQ_USERNAME={{ .Values.external.rabbitmq.username | default "stackbill" }}
+    {{- if .Values.external.nfs.server }}
+    NFS_SERVER={{ .Values.external.nfs.server }}
+    NFS_PATH={{ .Values.external.nfs.path | default "/data/stackbill" }}
+    {{- end }}
+    DOMAIN={{ .Values.domain.name }}
+{{- end }}

@@ -27,6 +27,12 @@ spec:
           value: /app/playbooks/
         - name: CERTIFICATE_PATH
           value: /opt/certificates/
+        - name: CONFIG_PATH
+          value: /app/config/config.json
+        - name: AUTO_CONFIG
+          value: "true"
+        - name: SKIP_WIZARD
+          value: "true"
         # Auto-load credentials from secrets and configmaps
         envFrom:
         - secretRef:
@@ -35,6 +41,14 @@ spec:
         - configMapRef:
             name: stackbill-poc-config
             optional: true
+        volumeMounts:
+        - name: app-config
+          mountPath: /app/config
+          readOnly: true
+        - name: app-config
+          mountPath: /app/.env
+          subPath: .env
+          readOnly: true
         resources:
           limits:
             memory: 512Mi
@@ -42,3 +56,8 @@ spec:
           requests:
             memory: 256Mi
             cpu: "0.5"
+      volumes:
+      - name: app-config
+        configMap:
+          name: stackbill-app-config
+          optional: true

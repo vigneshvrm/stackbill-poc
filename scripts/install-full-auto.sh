@@ -765,6 +765,142 @@ wait_for_pods() {
     log_warn "Timeout waiting for pods. Check: kubectl get pods -n $NAMESPACE"
 }
 
+# ============================================
+# AUTO-CONFIGURE DEPLOYMENT CONTROLLER
+# ============================================
+
+# Auto-configure the deployment controller via API
+auto_configure_controller() {
+    log_step "Auto-configuring StackBill Deployment Controller"
+
+    # Wait for pod to be fully ready
+    log_info "Waiting for sb-deployment-controller to be fully ready..."
+    kubectl wait --for=condition=ready pod -l app=sb-deployment-controller -n $NAMESPACE --timeout=120s
+
+    # Get pod name
+    local POD_NAME=$(kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller -o jsonpath='{.items[0].metadata.name}')
+    log_info "Pod: $POD_NAME"
+
+    # Start port-forward in background
+    log_info "Setting up port-forward..."
+    kubectl port-forward "pod/$POD_NAME" 8888:3000 -n $NAMESPACE &
+    local PF_PID=$!
+    sleep 5
+
+    # Try to configure via API
+    log_info "Attempting auto-configuration via API..."
+
+    # Prepare configuration payload
+    local CONFIG_PAYLOAD=$(cat <<EOF
+{
+    "mysql": {
+        "host": "$SERVER_IP",
+        "port": 3306,
+        "database": "stackbill",
+        "username": "stackbill",
+        "password": "$MYSQL_PASSWORD"
+    },
+    "mongodb": {
+        "host": "$SERVER_IP",
+        "port": 27017,
+        "database": "stackbill_usage",
+        "username": "stackbill",
+        "password": "$MONGODB_PASSWORD"
+    },
+    "rabbitmq": {
+        "host": "$SERVER_IP",
+        "port": 5672,
+        "username": "stackbill",
+        "password": "$RABBITMQ_PASSWORD"
+    },
+    "nfs": {
+        "server": "$SERVER_IP",
+        "path": "/data/stackbill"
+    },
+    "domain": "$DOMAIN"
+}
+EOF
+)
+
+    # Try common API endpoints
+    local ENDPOINTS=(
+        "/api/setup"
+        "/api/config"
+        "/api/v1/setup"
+        "/api/v1/config"
+        "/api/configuration"
+        "/api/init"
+        "/setup"
+        "/config"
+    )
+
+    local CONFIG_SUCCESS=false
+
+    for endpoint in "${ENDPOINTS[@]}"; do
+        log_info "Trying endpoint: $endpoint"
+
+        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "http://localhost:8888$endpoint" \
+            -H "Content-Type: application/json" \
+            -d "$CONFIG_PAYLOAD" 2>/dev/null || echo "000")
+
+        if [[ "$response" == "200" || "$response" == "201" ]]; then
+            log_info "Configuration successful via $endpoint (HTTP $response)"
+            CONFIG_SUCCESS=true
+            break
+        elif [[ "$response" != "404" && "$response" != "000" ]]; then
+            log_info "Endpoint $endpoint returned HTTP $response"
+        fi
+    done
+
+    # Try GET to discover API routes
+    if [[ "$CONFIG_SUCCESS" == "false" ]]; then
+        log_info "Probing API discovery endpoints..."
+        for probe in "/api" "/api/v1" "/swagger" "/openapi" "/health" "/"; do
+            local probe_response=$(curl -s "http://localhost:8888$probe" 2>/dev/null | head -c 500)
+            if [[ -n "$probe_response" && "$probe_response" != *"<!DOCTYPE"* ]]; then
+                log_info "API response from $probe: ${probe_response:0:200}..."
+            fi
+        done
+    fi
+
+    # Stop port-forward
+    kill $PF_PID 2>/dev/null || true
+
+    if [[ "$CONFIG_SUCCESS" == "true" ]]; then
+        log_info "Auto-configuration completed successfully!"
+    else
+        log_warn "Auto-configuration via API was not successful."
+        log_warn "The application may require manual configuration through the UI."
+        log_info ""
+        log_info "Access the UI to configure manually:"
+        log_info "  NodePort: http://$SERVER_IP:31331"
+        log_info "  Or use: kubectl port-forward svc/sb-deployment-controller 8080:80 -n $NAMESPACE"
+        log_info ""
+        log_info "Enter these credentials in the configuration wizard:"
+        log_info "  MySQL: $SERVER_IP:3306 | stackbill | $MYSQL_PASSWORD"
+        log_info "  MongoDB: $SERVER_IP:27017 | stackbill | $MONGODB_PASSWORD"
+        log_info "  RabbitMQ: $SERVER_IP:5672 | stackbill | $RABBITMQ_PASSWORD"
+        log_info "  NFS: $SERVER_IP | /data/stackbill"
+    fi
+}
+
+# Expose via NodePort for access without LoadBalancer
+setup_nodeport_access() {
+    log_step "Setting up NodePort access"
+
+    # Patch istio-ingressgateway to use NodePort with fixed ports
+    kubectl patch svc istio-ingressgateway -n istio-system --type='json' -p='[
+        {"op": "replace", "path": "/spec/type", "value": "NodePort"},
+        {"op": "add", "path": "/spec/ports/0/nodePort", "value": 31331},
+        {"op": "add", "path": "/spec/ports/1/nodePort", "value": 31332}
+    ]' 2>/dev/null || log_warn "Could not patch ingress gateway NodePorts"
+
+    log_info "Istio Ingress Gateway exposed on NodePorts:"
+    log_info "  HTTP:  $SERVER_IP:31331"
+    log_info "  HTTPS: $SERVER_IP:31332"
+}
+
 # Save credentials
 save_credentials() {
     log_step "Saving credentials"
@@ -823,7 +959,13 @@ print_summary() {
     echo -e "${GREEN}                      DEPLOYMENT COMPLETE!                                    ${NC}"
     echo -e "${GREEN}===============================================================================${NC}"
     echo ""
-    echo -e "Access StackBill at: ${CYAN}https://$DOMAIN${NC}"
+    echo -e "${CYAN}ACCESS OPTIONS:${NC}"
+    echo ""
+    echo -e "  1. Via NodePort (works immediately):"
+    echo -e "     ${CYAN}http://$SERVER_IP:31331${NC}"
+    echo ""
+    echo -e "  2. Via Domain (requires DNS pointing to this server):"
+    echo -e "     ${CYAN}https://$DOMAIN${NC}"
     echo ""
     echo -e "${YELLOW}IMPORTANT: Save these auto-generated credentials!${NC}"
     echo "Credentials file: $HOME/stackbill-credentials.txt"
@@ -846,7 +988,7 @@ print_summary() {
     echo "  kubectl get pods -n $NAMESPACE"
     echo "  kubectl logs -f deployment/sb-deployment-controller -n $NAMESPACE"
     echo ""
-    echo "Istio Ingress Gateway (point your DNS here):"
+    echo "Istio Ingress Gateway:"
     kubectl get svc istio-ingressgateway -n istio-system -o wide 2>/dev/null || true
     echo ""
 }
@@ -883,6 +1025,10 @@ main() {
     setup_namespace
     deploy_helm
     wait_for_pods
+
+    # Phase 5: Auto-configure the application
+    setup_nodeport_access
+    auto_configure_controller
 
     # Finish
     save_credentials
