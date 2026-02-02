@@ -733,28 +733,11 @@ install_rabbitmq() {
     # Set non-interactive mode
     export DEBIAN_FRONTEND=noninteractive
 
-    # Install prerequisites
+    # Remove any old repository files that might cause issues
+    rm -f /etc/apt/sources.list.d/rabbitmq*.list 2>/dev/null || true
+
+    # Install RabbitMQ from Ubuntu's default repository (simpler, more reliable)
     apt-get update -qq
-    apt-get install -y -qq curl gnupg apt-transport-https
-
-    # Add RabbitMQ signing keys
-    curl -1sLf "https://keys.openpgp.org/vks/v1/by-fingerprint/0A9AF2115F4687BD29803A206B73A36E6026DFCA" | gpg --dearmor -o /usr/share/keyrings/com.rabbitmq.team.gpg 2>/dev/null || true
-    curl -1sLf "https://github.com/rabbitmq/signing-keys/releases/download/3.0/cloudsmith.rabbitmq-erlang.E495BB49CC4BBE5B.key" | gpg --dearmor -o /usr/share/keyrings/rabbitmq.E495BB49CC4BBE5B.gpg 2>/dev/null || true
-    curl -1sLf "https://github.com/rabbitmq/signing-keys/releases/download/3.0/cloudsmith.rabbitmq-server.9F4587F226208342.key" | gpg --dearmor -o /usr/share/keyrings/rabbitmq.9F4587F226208342.gpg 2>/dev/null || true
-
-    # Add RabbitMQ repositories
-    cat > /etc/apt/sources.list.d/rabbitmq.list << 'RABBITMQ_REPO'
-deb [signed-by=/usr/share/keyrings/rabbitmq.E495BB49CC4BBE5B.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-erlang/deb/ubuntu jammy main
-deb-src [signed-by=/usr/share/keyrings/rabbitmq.E495BB49CC4BBE5B.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-erlang/deb/ubuntu jammy main
-deb [signed-by=/usr/share/keyrings/rabbitmq.9F4587F226208342.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-server/deb/ubuntu jammy main
-deb-src [signed-by=/usr/share/keyrings/rabbitmq.9F4587F226208342.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-server/deb/ubuntu jammy main
-RABBITMQ_REPO
-
-    # Install Erlang and RabbitMQ
-    apt-get update -qq
-    apt-get install -y -qq erlang-base erlang-asn1 erlang-crypto erlang-eldap erlang-ftp erlang-inets \
-        erlang-mnesia erlang-os-mon erlang-parsetools erlang-public-key erlang-runtime-tools \
-        erlang-snmp erlang-ssl erlang-syntax-tools erlang-tftp erlang-tools erlang-xmerl
     apt-get install -y -qq rabbitmq-server
 
     # Start and enable RabbitMQ
