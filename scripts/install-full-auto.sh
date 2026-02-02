@@ -6,7 +6,7 @@
 # 1. Installs K3s Kubernetes (if not present)
 # 2. Installs Helm and kubectl
 # 3. Installs Istio service mesh
-# 4. Installs MySQL, MongoDB, RabbitMQ on the host
+# 4. Installs MySQL, MongoDB, RabbitMQ on the host (with auto-generated passwords)
 # 5. Sets up NFS storage
 # 6. Deploys sb-deployment-controller to Kubernetes
 # 7. Auto-configures with all credentials
@@ -30,10 +30,10 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Default passwords
-MYSQL_PASSWORD="StackB1ll2024Mysql"
-MONGODB_PASSWORD="StackB1ll2024Mongo"
-RABBITMQ_PASSWORD="StackB1ll2024Rmq"
+# Passwords will be auto-generated if not provided
+MYSQL_PASSWORD=""
+MONGODB_PASSWORD=""
+RABBITMQ_PASSWORD=""
 
 # Versions
 K3S_VERSION="v1.29.0+k3s1"
@@ -61,6 +61,8 @@ print_banner() {
     echo "       4. Setup NFS storage                                                    "
     echo "       5. Deploy StackBill deployment controller                               "
     echo "                                                                               "
+    echo "     Passwords will be auto-generated and saved to credentials file.          "
+    echo "                                                                               "
     echo "==============================================================================="
     echo -e "${NC}"
 }
@@ -75,6 +77,42 @@ log_step() {
     echo -e "${BLUE}  STEP: $1${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
+}
+
+# Generate secure random password
+generate_password() {
+    # Generate 16 character alphanumeric password
+    if command -v openssl &> /dev/null; then
+        openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16
+    else
+        cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 16
+    fi
+}
+
+# Generate all passwords
+generate_passwords() {
+    log_step "Generating secure passwords"
+
+    if [[ -z "$MYSQL_PASSWORD" ]]; then
+        MYSQL_PASSWORD=$(generate_password)
+        log_info "MySQL password: [auto-generated]"
+    else
+        log_info "MySQL password: [user-provided]"
+    fi
+
+    if [[ -z "$MONGODB_PASSWORD" ]]; then
+        MONGODB_PASSWORD=$(generate_password)
+        log_info "MongoDB password: [auto-generated]"
+    else
+        log_info "MongoDB password: [user-provided]"
+    fi
+
+    if [[ -z "$RABBITMQ_PASSWORD" ]]; then
+        RABBITMQ_PASSWORD=$(generate_password)
+        log_info "RabbitMQ password: [auto-generated]"
+    else
+        log_info "RabbitMQ password: [user-provided]"
+    fi
 }
 
 # Parse arguments
@@ -135,9 +173,9 @@ show_help() {
     echo "  --ssl-key       Path to SSL private key file"
     echo ""
     echo "Optional:"
-    echo "  --mysql-password     MySQL password (default: StackB1ll2024Mysql)"
-    echo "  --mongodb-password   MongoDB password (default: StackB1ll2024Mongo)"
-    echo "  --rabbitmq-password  RabbitMQ password (default: StackB1ll2024Rmq)"
+    echo "  --mysql-password     MySQL password (auto-generated if not provided)"
+    echo "  --mongodb-password   MongoDB password (auto-generated if not provided)"
+    echo "  --rabbitmq-password  RabbitMQ password (auto-generated if not provided)"
     echo "  --skip-db-install    Skip database installation (use existing)"
     echo "  --skip-k8s-install   Skip Kubernetes/Istio installation (use existing)"
     echo "  -h, --help           Show this help message"
@@ -172,6 +210,15 @@ check_root() {
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root (sudo)"
         exit 1
+    fi
+}
+
+# Install expect for automation
+install_expect() {
+    if ! command -v expect &> /dev/null; then
+        log_info "Installing expect for automation..."
+        apt-get update -qq
+        apt-get install -y -qq expect
     fi
 }
 
@@ -214,6 +261,9 @@ check_system_requirements() {
     else
         log_info "Disk space OK"
     fi
+
+    # Install expect for database automation
+    install_expect
 }
 
 # Get server IP
@@ -434,10 +484,10 @@ verify_kubernetes() {
 }
 
 # ============================================
-# DATABASE INSTALLATION
+# DATABASE INSTALLATION (with auto-input)
 # ============================================
 
-# Install MySQL
+# Install MySQL with expect automation
 install_mysql() {
     if [[ "$SKIP_DB_INSTALL" == "true" ]]; then
         log_info "Skipping MySQL installation (--skip-db-install)"
@@ -461,23 +511,22 @@ install_mysql() {
         chmod +x Mysql.sh
     fi
 
-    # Run MySQL installation
-    log_warn "Running MySQL installation..."
-    log_warn "When prompted, use username: stackbill, password: $MYSQL_PASSWORD"
+    # Run MySQL installation with expect for automation
+    log_info "Running MySQL installation with auto-configuration..."
+    log_info "Username: stackbill, Password: [auto-generated]"
 
-    # Try to run with expect if available, otherwise interactive
-    if command -v expect &> /dev/null; then
-        log_info "Using automated installation..."
-        expect << EOF
+    expect << EXPECT_EOF
+set timeout 600
 spawn ./Mysql.sh
-expect "Do you want to proceed*" { send "Y\r" }
-expect "Enter username*" { send "stackbill\r" }
-expect "Enter password*" { send "$MYSQL_PASSWORD\r" }
-expect eof
-EOF
-    else
-        ./Mysql.sh || true
-    fi
+expect {
+    "Do you want to proceed*" { send "Y\r"; exp_continue }
+    "Enter username*" { send "stackbill\r"; exp_continue }
+    "Enter password*" { send "${MYSQL_PASSWORD}\r"; exp_continue }
+    "press any key*" { send "\r"; exp_continue }
+    "Press any key*" { send "\r"; exp_continue }
+    eof
+}
+EXPECT_EOF
 
     popd > /dev/null
 
@@ -490,7 +539,7 @@ EOF
     fi
 }
 
-# Install MongoDB
+# Install MongoDB with expect automation
 install_mongodb() {
     if [[ "$SKIP_DB_INSTALL" == "true" ]]; then
         log_info "Skipping MongoDB installation (--skip-db-install)"
@@ -514,11 +563,21 @@ install_mongodb() {
         chmod +x Mongodb.sh
     fi
 
-    # Run MongoDB installation
-    log_warn "Running MongoDB installation..."
-    log_warn "When prompted, use username: stackbill, password: $MONGODB_PASSWORD"
+    # Run MongoDB installation with expect for automation
+    log_info "Running MongoDB installation with auto-configuration..."
+    log_info "Username: stackbill, Password: [auto-generated]"
 
-    ./Mongodb.sh || true
+    expect << EXPECT_EOF
+set timeout 600
+spawn ./Mongodb.sh
+expect {
+    "Enter username*" { send "stackbill\r"; exp_continue }
+    "Enter password*" { send "${MONGODB_PASSWORD}\r"; exp_continue }
+    "press any key*" { send "\r"; exp_continue }
+    "Press any key*" { send "\r"; exp_continue }
+    eof
+}
+EXPECT_EOF
 
     popd > /dev/null
 
@@ -531,7 +590,7 @@ install_mongodb() {
     fi
 }
 
-# Install RabbitMQ
+# Install RabbitMQ with expect automation
 install_rabbitmq() {
     if [[ "$SKIP_DB_INSTALL" == "true" ]]; then
         log_info "Skipping RabbitMQ installation (--skip-db-install)"
@@ -555,11 +614,24 @@ install_rabbitmq() {
         chmod +x rabbitmq.sh
     fi
 
-    # Run RabbitMQ installation
-    log_warn "Running RabbitMQ installation..."
-    log_warn "When prompted, use username: stackbill, password: $RABBITMQ_PASSWORD"
+    # Run RabbitMQ installation with expect for automation
+    log_info "Running RabbitMQ installation with auto-configuration..."
+    log_info "Username: stackbill, Password: [auto-generated]"
 
-    ./rabbitmq.sh || true
+    expect << EXPECT_EOF
+set timeout 600
+spawn ./rabbitmq.sh
+expect {
+    "Daemons using outdated*" { send "\r"; exp_continue }
+    "Which services should*" { send "\r"; exp_continue }
+    "Enter username*" { send "stackbill\r"; exp_continue }
+    "Enter password*" { send "${RABBITMQ_PASSWORD}\r"; exp_continue }
+    "press any key*" { send "\r"; exp_continue }
+    "Press any key*" { send "\r"; exp_continue }
+    "q" { send "q"; exp_continue }
+    eof
+}
+EXPECT_EOF
 
     popd > /dev/null
 
@@ -631,9 +703,9 @@ deploy_helm() {
     cd "$CHART_DIR"
     log_info "Working from chart directory: $CHART_DIR"
 
-    # Update dependencies
-    log_info "Updating Helm dependencies..."
-    helm dependency update . 2>/dev/null || true
+    # Build dependencies first
+    log_info "Building Helm dependencies..."
+    helm dependency build . 2>/dev/null || helm dependency update . 2>/dev/null || true
 
     # Deploy with external services configuration
     log_info "Deploying sb-deployment-controller..."
@@ -667,15 +739,24 @@ wait_for_pods() {
     local elapsed=0
 
     while [[ $elapsed -lt $timeout ]]; do
-        local ready=$(kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | tr ' ' '\n' | grep -c "True" || echo "0")
-        local total=$(kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l || echo "0")
+        # Get ready count - handle multiple values by taking first number
+        local ready_output=$(kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+        local ready=$(echo "$ready_output" | tr ' ' '\n' | grep -c "True" 2>/dev/null || echo "0")
 
-        if [[ $total -gt 0 && $ready -eq $total ]]; then
+        # Get total count - trim whitespace
+        local total=$(kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+
+        # Ensure we have numeric values
+        ready=${ready:-0}
+        total=${total:-0}
+
+        if [[ "$total" =~ ^[0-9]+$ ]] && [[ "$ready" =~ ^[0-9]+$ ]] && [[ $total -gt 0 ]] && [[ $ready -eq $total ]]; then
+            echo ""
             log_info "All pods are ready ($ready/$total)"
             return 0
         fi
 
-        echo -ne "\r${YELLOW}[WAIT]${NC} Pods ready: $ready/$total (${elapsed}s)"
+        printf "\r${YELLOW}[WAIT]${NC} Pods ready: %s/%s (%ds)" "$ready" "$total" "$elapsed"
         sleep 5
         elapsed=$((elapsed + 5))
     done
@@ -744,16 +825,26 @@ print_summary() {
     echo ""
     echo -e "Access StackBill at: ${CYAN}https://$DOMAIN${NC}"
     echo ""
-    echo "Credentials saved to: $HOME/stackbill-credentials.txt"
+    echo -e "${YELLOW}IMPORTANT: Save these auto-generated credentials!${NC}"
+    echo "Credentials file: $HOME/stackbill-credentials.txt"
+    echo ""
+    echo "Database connection details:"
+    echo "  MySQL:    $SERVER_IP:3306"
+    echo "    Username: stackbill"
+    echo "    Password: $MYSQL_PASSWORD"
+    echo ""
+    echo "  MongoDB:  $SERVER_IP:27017"
+    echo "    Username: stackbill"
+    echo "    Password: $MONGODB_PASSWORD"
+    echo ""
+    echo "  RabbitMQ: $SERVER_IP:5672"
+    echo "    Username: stackbill"
+    echo "    Password: $RABBITMQ_PASSWORD"
+    echo "    Management UI: http://$SERVER_IP:15672"
     echo ""
     echo "Useful commands:"
     echo "  kubectl get pods -n $NAMESPACE"
     echo "  kubectl logs -f deployment/sb-deployment-controller -n $NAMESPACE"
-    echo ""
-    echo "Database connection details:"
-    echo "  MySQL:    $SERVER_IP:3306 (stackbill / $MYSQL_PASSWORD)"
-    echo "  MongoDB:  $SERVER_IP:27017 (stackbill / $MONGODB_PASSWORD)"
-    echo "  RabbitMQ: $SERVER_IP:5672 (stackbill / $RABBITMQ_PASSWORD)"
     echo ""
     echo "Istio Ingress Gateway (point your DNS here):"
     kubectl get svc istio-ingressgateway -n istio-system -o wide 2>/dev/null || true
@@ -768,6 +859,9 @@ main() {
     validate_inputs
     check_system_requirements
     get_server_ip
+
+    # Generate passwords if not provided
+    generate_passwords
 
     # Phase 1: Kubernetes Infrastructure
     install_kubectl
