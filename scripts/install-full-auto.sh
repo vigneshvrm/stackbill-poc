@@ -517,72 +517,88 @@ wait_for_apt_lock() {
     return 1
 }
 
-# Install MySQL with expect automation
+# Install MySQL - FULLY AUTOMATED (no interactive prompts)
 install_mysql() {
     if [[ "$SKIP_DB_INSTALL" == "true" ]]; then
         log_info "Skipping MySQL installation (--skip-db-install)"
         return
     fi
 
-    log_step "Installing MySQL"
+    log_step "Installing MySQL (Fully Automated)"
 
     # Check if MySQL already running
     if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mysqld 2>/dev/null; then
         log_info "MySQL is already running"
+        # Ensure user exists
+        mysql -u root -e "CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';" 2>/dev/null || true
+        mysql -u root -e "GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION;" 2>/dev/null || true
+        mysql -u root -e "FLUSH PRIVILEGES;" 2>/dev/null || true
         return 0
     fi
 
     # Wait for any apt locks to be released
     wait_for_apt_lock || return 1
 
-    pushd /usr/local/src > /dev/null
+    log_info "Installing MySQL Server via apt (non-interactive)..."
 
-    # Download StackBill MySQL script
-    if [[ ! -f "Mysql.sh" ]]; then
-        log_info "Downloading MySQL installation script..."
-        wget -q https://stacbilldeploy.s3.us-east-1.amazonaws.com/Mysql/Mysql.sh
-        chmod +x Mysql.sh
-    fi
+    # Set non-interactive mode
+    export DEBIAN_FRONTEND=noninteractive
 
-    # Run MySQL installation with expect for automation
-    log_info "Running MySQL installation with auto-configuration..."
-    log_info "Username: stackbill, Password: [auto-generated]"
+    # Install MySQL
+    apt-get update -qq
+    apt-get install -y -qq mysql-server mysql-client
 
-    expect << EXPECT_EOF
-set timeout 600
-spawn ./Mysql.sh
-expect {
-    "Do you want to proceed*" { send "Y\r"; exp_continue }
-    "Enter username*" { send "stackbill\r"; exp_continue }
-    "Enter password*" { send "${MYSQL_PASSWORD}\r"; exp_continue }
-    "press any key*" { send "\r"; exp_continue }
-    "Press any key*" { send "\r"; exp_continue }
-    eof
-}
-EXPECT_EOF
+    # Start and enable MySQL
+    systemctl start mysql
+    systemctl enable mysql
 
-    popd > /dev/null
+    # Wait for MySQL to be ready
+    log_info "Waiting for MySQL to be ready..."
+    local retries=30
+    while ! mysqladmin ping -h localhost --silent 2>/dev/null; do
+        retries=$((retries - 1))
+        if [[ $retries -le 0 ]]; then
+            log_error "MySQL failed to start"
+            return 1
+        fi
+        sleep 2
+    done
 
-    # Wait for installation to complete and apt to be released
-    log_info "Waiting for MySQL installation to complete..."
-    sleep 10
+    # Configure MySQL user
+    log_info "Creating MySQL user: stackbill"
+    mysql -u root << MYSQL_EOF
+CREATE DATABASE IF NOT EXISTS stackbill;
+CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
+CREATE USER IF NOT EXISTS 'stackbill'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+MYSQL_EOF
 
-    # Verify MySQL is running
-    if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mysqld 2>/dev/null; then
-        log_info "MySQL installed successfully"
+    # Configure MySQL to allow remote connections
+    log_info "Configuring MySQL for remote access..."
+    sed -i 's/bind-address\s*=\s*127.0.0.1/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || true
+    systemctl restart mysql
+
+    # Verify
+    if systemctl is-active --quiet mysql; then
+        log_info "MySQL installed and configured successfully"
+        log_info "  User: stackbill"
+        log_info "  Database: stackbill"
     else
-        log_warn "MySQL may need manual verification. Check: systemctl status mysql"
+        log_error "MySQL installation failed"
+        return 1
     fi
 }
 
-# Install MongoDB with expect automation
+# Install MongoDB - FULLY AUTOMATED (no interactive prompts)
 install_mongodb() {
     if [[ "$SKIP_DB_INSTALL" == "true" ]]; then
         log_info "Skipping MongoDB installation (--skip-db-install)"
         return
     fi
 
-    log_step "Installing MongoDB"
+    log_step "Installing MongoDB (Fully Automated)"
 
     # Check if MongoDB already running
     if systemctl is-active --quiet mongod 2>/dev/null; then
@@ -593,102 +609,191 @@ install_mongodb() {
     # Wait for any apt locks to be released
     wait_for_apt_lock || return 1
 
-    pushd /usr/local/src > /dev/null
+    log_info "Installing MongoDB 7.0 via apt (non-interactive)..."
 
-    # Download StackBill MongoDB script
-    if [[ ! -f "Mongodb.sh" ]]; then
-        log_info "Downloading MongoDB installation script..."
-        wget -q https://stacbilldeploy.s3.us-east-1.amazonaws.com/MongoDB/Mongodb.sh
-        chmod +x Mongodb.sh
-    fi
+    # Set non-interactive mode
+    export DEBIAN_FRONTEND=noninteractive
 
-    # Run MongoDB installation with expect for automation
-    log_info "Running MongoDB installation with auto-configuration..."
-    log_info "Username: stackbill, Password: [auto-generated]"
+    # Install prerequisites
+    apt-get update -qq
+    apt-get install -y -qq gnupg curl
 
-    expect << EXPECT_EOF
-set timeout 600
-spawn ./Mongodb.sh
-expect {
-    "Enter username*" { send "stackbill\r"; exp_continue }
-    "Enter password*" { send "${MONGODB_PASSWORD}\r"; exp_continue }
-    "press any key*" { send "\r"; exp_continue }
-    "Press any key*" { send "\r"; exp_continue }
-    eof
-}
-EXPECT_EOF
+    # Add MongoDB GPG key and repository
+    curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg 2>/dev/null || true
+    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list
 
-    popd > /dev/null
+    # Install MongoDB
+    apt-get update -qq
+    apt-get install -y -qq mongodb-org
 
-    # Wait for installation to complete and apt to be released
-    log_info "Waiting for MongoDB installation to complete..."
-    sleep 10
+    # Configure MongoDB for remote access (bind to all interfaces)
+    log_info "Configuring MongoDB for remote access..."
+    cat > /etc/mongod.conf << 'MONGOD_CONF'
+storage:
+  dbPath: /var/lib/mongodb
+systemLog:
+  destination: file
+  logAppend: true
+  path: /var/log/mongodb/mongod.log
+net:
+  port: 27017
+  bindIp: 0.0.0.0
+processManagement:
+  timeZoneInfo: /usr/share/zoneinfo
+security:
+  authorization: enabled
+MONGOD_CONF
 
-    # Verify MongoDB is running
-    if systemctl is-active --quiet mongod 2>/dev/null; then
-        log_info "MongoDB installed successfully"
+    # Create data directory
+    mkdir -p /var/lib/mongodb
+    chown -R mongodb:mongodb /var/lib/mongodb
+
+    # Start MongoDB WITHOUT auth first to create user
+    log_info "Starting MongoDB to create admin user..."
+    sed -i 's/authorization: enabled/authorization: disabled/' /etc/mongod.conf
+    systemctl start mongod
+    systemctl enable mongod
+
+    # Wait for MongoDB to be ready
+    local retries=30
+    while ! mongosh --quiet --eval "db.runCommand('ping').ok" 2>/dev/null; do
+        retries=$((retries - 1))
+        if [[ $retries -le 0 ]]; then
+            log_error "MongoDB failed to start"
+            return 1
+        fi
+        sleep 2
+    done
+
+    # Create admin user
+    log_info "Creating MongoDB user: stackbill"
+    mongosh --quiet << MONGO_EOF
+use admin
+db.createUser({
+  user: "stackbill",
+  pwd: "${MONGODB_PASSWORD}",
+  roles: [
+    { role: "root", db: "admin" },
+    { role: "readWriteAnyDatabase", db: "admin" }
+  ]
+})
+use stackbill_usage
+db.createUser({
+  user: "stackbill",
+  pwd: "${MONGODB_PASSWORD}",
+  roles: [
+    { role: "readWrite", db: "stackbill_usage" }
+  ]
+})
+MONGO_EOF
+
+    # Re-enable authentication and restart
+    log_info "Enabling MongoDB authentication..."
+    sed -i 's/authorization: disabled/authorization: enabled/' /etc/mongod.conf
+    systemctl restart mongod
+
+    # Wait for restart
+    sleep 5
+
+    # Verify
+    if systemctl is-active --quiet mongod; then
+        log_info "MongoDB installed and configured successfully"
+        log_info "  User: stackbill"
+        log_info "  Database: stackbill_usage"
     else
-        log_warn "MongoDB may need manual verification. Check: systemctl status mongod"
+        log_error "MongoDB installation failed"
+        return 1
     fi
 }
 
-# Install RabbitMQ with expect automation
+# Install RabbitMQ - FULLY AUTOMATED (no interactive prompts)
 install_rabbitmq() {
     if [[ "$SKIP_DB_INSTALL" == "true" ]]; then
         log_info "Skipping RabbitMQ installation (--skip-db-install)"
         return
     fi
 
-    log_step "Installing RabbitMQ"
+    log_step "Installing RabbitMQ (Fully Automated)"
 
     # Check if RabbitMQ already running
     if systemctl is-active --quiet rabbitmq-server 2>/dev/null; then
         log_info "RabbitMQ is already running"
+        # Ensure user exists
+        rabbitmqctl add_user stackbill "${RABBITMQ_PASSWORD}" 2>/dev/null || rabbitmqctl change_password stackbill "${RABBITMQ_PASSWORD}" 2>/dev/null || true
+        rabbitmqctl set_user_tags stackbill administrator 2>/dev/null || true
+        rabbitmqctl set_permissions -p / stackbill ".*" ".*" ".*" 2>/dev/null || true
         return 0
     fi
 
     # Wait for any apt locks to be released
     wait_for_apt_lock || return 1
 
-    pushd /usr/local/src > /dev/null
+    log_info "Installing RabbitMQ via apt (non-interactive)..."
 
-    # Download StackBill RabbitMQ script
-    if [[ ! -f "rabbitmq.sh" ]]; then
-        log_info "Downloading RabbitMQ installation script..."
-        wget -q https://stacbilldeploy.s3.us-east-1.amazonaws.com/RabbitMQ/rabbitmq.sh
-        chmod +x rabbitmq.sh
-    fi
+    # Set non-interactive mode
+    export DEBIAN_FRONTEND=noninteractive
 
-    # Run RabbitMQ installation with expect for automation
-    log_info "Running RabbitMQ installation with auto-configuration..."
-    log_info "Username: stackbill, Password: [auto-generated]"
+    # Install prerequisites
+    apt-get update -qq
+    apt-get install -y -qq curl gnupg apt-transport-https
 
-    expect << EXPECT_EOF
-set timeout 600
-spawn ./rabbitmq.sh
-expect {
-    "Daemons using outdated*" { send "\r"; exp_continue }
-    "Which services should*" { send "\r"; exp_continue }
-    "Enter username*" { send "stackbill\r"; exp_continue }
-    "Enter password*" { send "${RABBITMQ_PASSWORD}\r"; exp_continue }
-    "press any key*" { send "\r"; exp_continue }
-    "Press any key*" { send "\r"; exp_continue }
-    "q" { send "q"; exp_continue }
-    eof
-}
-EXPECT_EOF
+    # Add RabbitMQ signing keys
+    curl -1sLf "https://keys.openpgp.org/vks/v1/by-fingerprint/0A9AF2115F4687BD29803A206B73A36E6026DFCA" | gpg --dearmor -o /usr/share/keyrings/com.rabbitmq.team.gpg 2>/dev/null || true
+    curl -1sLf "https://github.com/rabbitmq/signing-keys/releases/download/3.0/cloudsmith.rabbitmq-erlang.E495BB49CC4BBE5B.key" | gpg --dearmor -o /usr/share/keyrings/rabbitmq.E495BB49CC4BBE5B.gpg 2>/dev/null || true
+    curl -1sLf "https://github.com/rabbitmq/signing-keys/releases/download/3.0/cloudsmith.rabbitmq-server.9F4587F226208342.key" | gpg --dearmor -o /usr/share/keyrings/rabbitmq.9F4587F226208342.gpg 2>/dev/null || true
 
-    popd > /dev/null
+    # Add RabbitMQ repositories
+    cat > /etc/apt/sources.list.d/rabbitmq.list << 'RABBITMQ_REPO'
+deb [signed-by=/usr/share/keyrings/rabbitmq.E495BB49CC4BBE5B.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-erlang/deb/ubuntu jammy main
+deb-src [signed-by=/usr/share/keyrings/rabbitmq.E495BB49CC4BBE5B.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-erlang/deb/ubuntu jammy main
+deb [signed-by=/usr/share/keyrings/rabbitmq.9F4587F226208342.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-server/deb/ubuntu jammy main
+deb-src [signed-by=/usr/share/keyrings/rabbitmq.9F4587F226208342.gpg] https://ppa1.novemberain.com/rabbitmq/rabbitmq-server/deb/ubuntu jammy main
+RABBITMQ_REPO
 
-    # Wait for installation to complete
-    log_info "Waiting for RabbitMQ installation to complete..."
-    sleep 10
+    # Install Erlang and RabbitMQ
+    apt-get update -qq
+    apt-get install -y -qq erlang-base erlang-asn1 erlang-crypto erlang-eldap erlang-ftp erlang-inets \
+        erlang-mnesia erlang-os-mon erlang-parsetools erlang-public-key erlang-runtime-tools \
+        erlang-snmp erlang-ssl erlang-syntax-tools erlang-tftp erlang-tools erlang-xmerl
+    apt-get install -y -qq rabbitmq-server
 
-    # Verify RabbitMQ is running
-    if systemctl is-active --quiet rabbitmq-server 2>/dev/null; then
-        log_info "RabbitMQ installed successfully"
+    # Start and enable RabbitMQ
+    systemctl start rabbitmq-server
+    systemctl enable rabbitmq-server
+
+    # Wait for RabbitMQ to be ready
+    log_info "Waiting for RabbitMQ to be ready..."
+    local retries=30
+    while ! rabbitmqctl status &>/dev/null; do
+        retries=$((retries - 1))
+        if [[ $retries -le 0 ]]; then
+            log_error "RabbitMQ failed to start"
+            return 1
+        fi
+        sleep 2
+    done
+
+    # Enable management plugin
+    log_info "Enabling RabbitMQ management plugin..."
+    rabbitmq-plugins enable rabbitmq_management
+
+    # Create user
+    log_info "Creating RabbitMQ user: stackbill"
+    rabbitmqctl add_user stackbill "${RABBITMQ_PASSWORD}" 2>/dev/null || rabbitmqctl change_password stackbill "${RABBITMQ_PASSWORD}"
+    rabbitmqctl set_user_tags stackbill administrator
+    rabbitmqctl set_permissions -p / stackbill ".*" ".*" ".*"
+
+    # Delete default guest user for security
+    rabbitmqctl delete_user guest 2>/dev/null || true
+
+    # Verify
+    if systemctl is-active --quiet rabbitmq-server; then
+        log_info "RabbitMQ installed and configured successfully"
+        log_info "  User: stackbill"
+        log_info "  Management UI: http://${SERVER_IP}:15672"
     else
-        log_warn "RabbitMQ may need manual verification. Check: systemctl status rabbitmq-server"
+        log_error "RabbitMQ installation failed"
+        return 1
     fi
 }
 
