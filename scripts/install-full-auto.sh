@@ -42,6 +42,11 @@ ISTIO_VERSION="1.20.3"
 # Namespace
 NAMESPACE="sb-system"
 
+# Save original directory (before any cd commands)
+ORIGINAL_DIR="$(pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHART_DIR="$(dirname "$SCRIPT_DIR")"
+
 # Banner
 print_banner() {
     echo -e "${CYAN}"
@@ -336,11 +341,11 @@ install_istio() {
     # Download istioctl if not present
     if ! command -v istioctl &> /dev/null; then
         log_info "Downloading istioctl..."
-        cd /tmp
+        pushd /tmp > /dev/null
         curl -L https://istio.io/downloadIstio | ISTIO_VERSION=$ISTIO_VERSION sh -
         mv istio-$ISTIO_VERSION/bin/istioctl /usr/local/bin/
         rm -rf istio-$ISTIO_VERSION
-        cd -
+        popd > /dev/null
     fi
 
     # Install Istio with demo profile
@@ -447,7 +452,7 @@ install_mysql() {
         return 0
     fi
 
-    cd /usr/local/src
+    pushd /usr/local/src > /dev/null
 
     # Download StackBill MySQL script
     if [[ ! -f "Mysql.sh" ]]; then
@@ -474,6 +479,8 @@ EOF
         ./Mysql.sh || true
     fi
 
+    popd > /dev/null
+
     # Verify MySQL is running
     sleep 5
     if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mysqld 2>/dev/null; then
@@ -498,7 +505,7 @@ install_mongodb() {
         return 0
     fi
 
-    cd /usr/local/src
+    pushd /usr/local/src > /dev/null
 
     # Download StackBill MongoDB script
     if [[ ! -f "Mongodb.sh" ]]; then
@@ -512,6 +519,8 @@ install_mongodb() {
     log_warn "When prompted, use username: stackbill, password: $MONGODB_PASSWORD"
 
     ./Mongodb.sh || true
+
+    popd > /dev/null
 
     # Verify MongoDB is running
     sleep 5
@@ -537,7 +546,7 @@ install_rabbitmq() {
         return 0
     fi
 
-    cd /usr/local/src
+    pushd /usr/local/src > /dev/null
 
     # Download StackBill RabbitMQ script
     if [[ ! -f "rabbitmq.sh" ]]; then
@@ -551,6 +560,8 @@ install_rabbitmq() {
     log_warn "When prompted, use username: stackbill, password: $RABBITMQ_PASSWORD"
 
     ./rabbitmq.sh || true
+
+    popd > /dev/null
 
     # Verify RabbitMQ is running
     sleep 5
@@ -616,11 +627,9 @@ setup_namespace() {
 deploy_helm() {
     log_step "Deploying StackBill Helm chart"
 
-    # Get script directory
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    CHART_DIR="$(dirname "$SCRIPT_DIR")"
-
+    # Change to chart directory (CHART_DIR computed at script start)
     cd "$CHART_DIR"
+    log_info "Working from chart directory: $CHART_DIR"
 
     # Update dependencies
     log_info "Updating Helm dependencies..."
