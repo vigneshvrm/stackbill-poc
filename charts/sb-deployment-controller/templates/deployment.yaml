@@ -27,6 +27,14 @@ spec:
           value: /app/playbooks/
         - name: CERTIFICATE_PATH
           value: /opt/certificates/
+        # Auto-load credentials from secrets and configmaps
+        envFrom:
+        - secretRef:
+            name: stackbill-auto-credentials
+            optional: true
+        - configMapRef:
+            name: stackbill-poc-config
+            optional: true
         resources:
           limits:
             memory: 512Mi

@@ -227,3 +227,34 @@ poc:
     totalCPU: "8"
     totalMemory: "16Gi"
     totalStorage: "200Gi"
+
+# --------------------------------------------
+# EXTERNAL SERVICES (HYBRID MODE)
+# --------------------------------------------
+# Use these settings when running databases on host instead of K8s
+# Set mysql.enabled=false, mongodb.enabled=false, rabbitmq.enabled=false
+# then configure external hosts below
+external:
+  mysql:
+    host: ""         # Server IP (e.g., 192.168.1.100)
+    port: 3306
+    database: stackbill
+    username: stackbill
+    password: ""     # Required when using external MySQL
+
+  mongodb:
+    host: ""         # Server IP (e.g., 192.168.1.100)
+    port: 27017
+    database: stackbill_usage
+    username: stackbill
+    password: ""     # Required when using external MongoDB
+
+  rabbitmq:
+    host: ""         # Server IP (e.g., 192.168.1.100)
+    port: 5672
+    username: stackbill
+    password: ""     # Required when using external RabbitMQ
+
+  nfs:
+    server: ""       # Server IP (e.g., 192.168.1.100)
+    path: /data/stackbill
