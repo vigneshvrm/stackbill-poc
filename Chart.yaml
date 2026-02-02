@@ -28,21 +28,21 @@ dependencies:
 
   # MySQL - Auto-provisioned
   - name: mysql
-    version: "9.14.1"
+    version: "12.3.5"
     repository: https://charts.bitnami.com/bitnami
     condition: mysql.enabled
     alias: mysql
 
   # MongoDB - Auto-provisioned
   - name: mongodb
-    version: "14.3.0"
+    version: "18.3.0"
     repository: https://charts.bitnami.com/bitnami
     condition: mongodb.enabled
     alias: mongodb
 
   # RabbitMQ - Auto-provisioned
   - name: rabbitmq
-    version: "12.5.0"
+    version: "16.0.14"
     repository: https://charts.bitnami.com/bitnami
     condition: rabbitmq.enabled
     alias: rabbitmq

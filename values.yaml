@@ -57,6 +57,10 @@ sb-deployment-controller:
 mysql:
   enabled: true
 
+  # Disable Istio sidecar injection for database pods
+  podAnnotations:
+    sidecar.istio.io/inject: "false"
+
   # Auto-generated credentials for POC
   auth:
     rootPassword: ""  # Auto-generated if empty
@@ -93,6 +97,10 @@ mysql:
 mongodb:
   enabled: true
 
+  # Disable Istio sidecar injection for database pods
+  podAnnotations:
+    sidecar.istio.io/inject: "false"
+
   auth:
     enabled: true
     rootPassword: ""  # Auto-generated if empty
@@ -120,6 +128,10 @@ mongodb:
 # --------------------------------------------
 rabbitmq:
   enabled: true
+
+  # Disable Istio sidecar injection for database pods
+  podAnnotations:
+    sidecar.istio.io/inject: "false"
 
   auth:
     username: stackbill
