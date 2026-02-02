@@ -487,6 +487,36 @@ verify_kubernetes() {
 # DATABASE INSTALLATION (with auto-input)
 # ============================================
 
+# Wait for apt locks to be released
+wait_for_apt_lock() {
+    local max_wait=300  # 5 minutes max
+    local waited=0
+
+    log_info "Checking for apt locks..."
+
+    while [[ $waited -lt $max_wait ]]; do
+        # Check if any apt/dpkg processes are running
+        if ! fuser /var/lib/dpkg/lock-frontend &>/dev/null && \
+           ! fuser /var/lib/apt/lists/lock &>/dev/null && \
+           ! fuser /var/cache/apt/archives/lock &>/dev/null; then
+            log_info "No apt locks detected, proceeding..."
+            return 0
+        fi
+
+        if [[ $waited -eq 0 ]]; then
+            log_warn "Waiting for apt locks to be released (another package manager is running)..."
+        fi
+
+        sleep 5
+        waited=$((waited + 5))
+        printf "\r${YELLOW}[WAIT]${NC} Waiting for apt lock... (%ds)" "$waited"
+    done
+
+    echo ""
+    log_error "Timeout waiting for apt locks. Try: sudo killall apt apt-get dpkg"
+    return 1
+}
+
 # Install MySQL with expect automation
 install_mysql() {
     if [[ "$SKIP_DB_INSTALL" == "true" ]]; then
@@ -501,6 +531,9 @@ install_mysql() {
         log_info "MySQL is already running"
         return 0
     fi
+
+    # Wait for any apt locks to be released
+    wait_for_apt_lock || return 1
 
     pushd /usr/local/src > /dev/null
 
@@ -530,8 +563,11 @@ EXPECT_EOF
 
     popd > /dev/null
 
+    # Wait for installation to complete and apt to be released
+    log_info "Waiting for MySQL installation to complete..."
+    sleep 10
+
     # Verify MySQL is running
-    sleep 5
     if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mysqld 2>/dev/null; then
         log_info "MySQL installed successfully"
     else
@@ -553,6 +589,9 @@ install_mongodb() {
         log_info "MongoDB is already running"
         return 0
     fi
+
+    # Wait for any apt locks to be released
+    wait_for_apt_lock || return 1
 
     pushd /usr/local/src > /dev/null
 
@@ -581,8 +620,11 @@ EXPECT_EOF
 
     popd > /dev/null
 
+    # Wait for installation to complete and apt to be released
+    log_info "Waiting for MongoDB installation to complete..."
+    sleep 10
+
     # Verify MongoDB is running
-    sleep 5
     if systemctl is-active --quiet mongod 2>/dev/null; then
         log_info "MongoDB installed successfully"
     else
@@ -604,6 +646,9 @@ install_rabbitmq() {
         log_info "RabbitMQ is already running"
         return 0
     fi
+
+    # Wait for any apt locks to be released
+    wait_for_apt_lock || return 1
 
     pushd /usr/local/src > /dev/null
 
@@ -635,8 +680,11 @@ EXPECT_EOF
 
     popd > /dev/null
 
+    # Wait for installation to complete
+    log_info "Waiting for RabbitMQ installation to complete..."
+    sleep 10
+
     # Verify RabbitMQ is running
-    sleep 5
     if systemctl is-active --quiet rabbitmq-server 2>/dev/null; then
         log_info "RabbitMQ installed successfully"
     else
