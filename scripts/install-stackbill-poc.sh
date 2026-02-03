@@ -90,6 +90,7 @@ parse_args() {
             *) log_error "Unknown: $1"; exit 1 ;;
         esac
     done
+    return 0
 }
 
 show_help() {
