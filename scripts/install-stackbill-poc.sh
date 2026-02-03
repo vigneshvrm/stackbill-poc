@@ -17,6 +17,9 @@
 
 set -e
 
+# Error trap for debugging
+trap 'echo "ERROR: Script failed at line $LINENO with exit code $?" >&2' ERR
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -108,11 +111,49 @@ show_help() {
 }
 
 validate_inputs() {
-    [[ -z "$DOMAIN" ]] && { log_error "Domain required (--domain)"; exit 1; }
-    [[ -z "$SSL_CERT" || ! -f "$SSL_CERT" ]] && { log_error "SSL cert not found: $SSL_CERT"; exit 1; }
-    [[ -z "$SSL_KEY" || ! -f "$SSL_KEY" ]] && { log_error "SSL key not found: $SSL_KEY"; exit 1; }
-    [[ ! -d "$CONTROLLER_CHART" ]] && { log_error "Controller chart not found at: $CONTROLLER_CHART"; exit 1; }
-    [[ $EUID -ne 0 ]] && { log_error "Run as root (sudo)"; exit 1; }
+    log_info "Validating inputs..."
+
+    if [[ -z "$DOMAIN" ]]; then
+        log_error "Domain required (--domain)"
+        exit 1
+    fi
+    log_info "  Domain: $DOMAIN"
+
+    if [[ -z "$SSL_CERT" ]]; then
+        log_error "SSL certificate path required (--ssl-cert)"
+        exit 1
+    fi
+    if [[ ! -f "$SSL_CERT" ]]; then
+        log_error "SSL certificate file not found: $SSL_CERT"
+        exit 1
+    fi
+    log_info "  SSL Cert: $SSL_CERT"
+
+    if [[ -z "$SSL_KEY" ]]; then
+        log_error "SSL key path required (--ssl-key)"
+        exit 1
+    fi
+    if [[ ! -f "$SSL_KEY" ]]; then
+        log_error "SSL key file not found: $SSL_KEY"
+        exit 1
+    fi
+    log_info "  SSL Key: $SSL_KEY"
+
+    if [[ ! -d "$CONTROLLER_CHART" ]]; then
+        log_error "Controller chart not found at: $CONTROLLER_CHART"
+        log_error "Make sure you're running from the stackbill-poc directory"
+        exit 1
+    fi
+    log_info "  Chart: $CONTROLLER_CHART"
+
+    if [[ $EUID -ne 0 ]]; then
+        log_error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+    log_info "  Running as root: yes"
+
+    log_info "Validation passed!"
+    return 0
 }
 
 get_server_ip() {
@@ -558,8 +599,14 @@ print_summary() {
 
 main() {
     print_banner
+    log_info "Starting installation..."
+
+    log_info "Parsing arguments..."
     parse_args "$@"
+    log_info "Arguments parsed: DOMAIN=$DOMAIN"
+
     validate_inputs
+
     get_server_ip
 
     # Generate passwords
