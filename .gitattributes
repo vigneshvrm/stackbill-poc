@@ -1,0 +1,18 @@
+# Force Unix line endings for all shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Force Unix line endings for YAML files (Kubernetes/Helm)
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Force Unix line endings for other text files commonly used in Linux
+Makefile text eol=lf
+Dockerfile text eol=lf
+*.conf text eol=lf
+*.json text eol=lf
+*.tpl text eol=lf
+
+# Git settings
+.gitattributes text eol=lf
+.gitignore text eol=lf
