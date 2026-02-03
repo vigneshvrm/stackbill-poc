@@ -893,6 +893,16 @@ deploy_stackbill_direct() {
     log_info "Deploying StackBill from: $STACKBILL_CHART"
     log_info "This deploys the actual StackBill application directly - NO UI WIZARD!"
 
+    # Create required namespaces (StackBill chart expects these)
+    log_info "Creating required namespaces..."
+    for ns in sb-apps sb-system; do
+        if ! kubectl get namespace $ns &> /dev/null; then
+            kubectl create namespace $ns
+            kubectl label namespace $ns istio-injection=enabled --overwrite
+            log_info "Namespace $ns created with Istio injection"
+        fi
+    done
+
     # Deploy StackBill with all credentials
     helm upgrade --install stackbill "$STACKBILL_CHART" \
         --namespace $NAMESPACE \
