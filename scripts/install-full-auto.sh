@@ -35,6 +35,13 @@ MYSQL_PASSWORD=""
 MONGODB_PASSWORD=""
 RABBITMQ_PASSWORD=""
 
+# AWS ECR credentials (read from file)
+AWS_ACCESS_KEY_ID=""
+AWS_SECRET_ACCESS_KEY=""
+AWS_REGION="ap-south-1"
+AWS_ACCOUNT_ID="730335576030"
+AWS_CREDS_FILE="/etc/stackbill/aws-credentials"
+
 # Versions
 K3S_VERSION="v1.29.0+k3s1"
 ISTIO_VERSION="1.20.3"
@@ -115,6 +122,135 @@ generate_passwords() {
     fi
 }
 
+# Load AWS credentials from file
+load_aws_credentials() {
+    log_step "Loading AWS ECR Credentials"
+
+    # Check multiple possible locations for credentials file
+    local creds_locations=(
+        "$AWS_CREDS_FILE"
+        "/etc/stackbill/aws-credentials"
+        "$HOME/.stackbill/aws-credentials"
+        "./aws-credentials"
+    )
+
+    local found_file=""
+    for loc in "${creds_locations[@]}"; do
+        if [[ -f "$loc" ]]; then
+            found_file="$loc"
+            break
+        fi
+    done
+
+    if [[ -z "$found_file" ]]; then
+        log_error "AWS credentials file not found!"
+        log_error "Checked locations:"
+        for loc in "${creds_locations[@]}"; do
+            log_error "  - $loc"
+        done
+        log_error ""
+        log_error "Create the credentials file with:"
+        log_error "  sudo mkdir -p /etc/stackbill"
+        log_error "  sudo nano /etc/stackbill/aws-credentials"
+        log_error ""
+        log_error "File format (one per line):"
+        log_error "  AWS_ACCESS_KEY_ID=your_access_key"
+        log_error "  AWS_SECRET_ACCESS_KEY=your_secret_key"
+        log_error ""
+        log_error "Then secure the file:"
+        log_error "  sudo chmod 600 /etc/stackbill/aws-credentials"
+        exit 1
+    fi
+
+    log_info "Found credentials file: $found_file"
+
+    # Read credentials from file
+    while IFS='=' read -r key value; do
+        # Skip empty lines and comments
+        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+        # Remove leading/trailing whitespace
+        key=$(echo "$key" | xargs)
+        value=$(echo "$value" | xargs)
+
+        case "$key" in
+            AWS_ACCESS_KEY_ID)
+                AWS_ACCESS_KEY_ID="$value"
+                ;;
+            AWS_SECRET_ACCESS_KEY)
+                AWS_SECRET_ACCESS_KEY="$value"
+                ;;
+            AWS_REGION)
+                AWS_REGION="$value"
+                ;;
+            AWS_ACCOUNT_ID)
+                AWS_ACCOUNT_ID="$value"
+                ;;
+        esac
+    done < "$found_file"
+
+    # Validate credentials
+    if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
+        log_error "AWS credentials incomplete in $found_file"
+        log_error "Both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required"
+        exit 1
+    fi
+
+    log_info "AWS Access Key ID: ${AWS_ACCESS_KEY_ID:0:8}..."
+    log_info "AWS Region: $AWS_REGION"
+    log_info "AWS Account ID: $AWS_ACCOUNT_ID"
+}
+
+# Create ECR image pull secret
+create_ecr_secret() {
+    log_step "Creating AWS ECR Image Pull Secret"
+
+    local ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+    # Install AWS CLI if not present
+    if ! command -v aws &> /dev/null; then
+        log_info "Installing AWS CLI..."
+        apt-get update -qq
+        apt-get install -y -qq awscli
+    fi
+
+    # Configure AWS credentials
+    export AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+    export AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+    export AWS_DEFAULT_REGION="$AWS_REGION"
+
+    # Get ECR login token
+    log_info "Getting ECR login token..."
+    local ECR_TOKEN
+    ECR_TOKEN=$(aws ecr get-login-password --region "$AWS_REGION" 2>/dev/null)
+
+    if [[ -z "$ECR_TOKEN" ]]; then
+        log_error "Failed to get ECR login token. Check your AWS credentials."
+        exit 1
+    fi
+
+    log_info "ECR token obtained successfully"
+
+    # Create secret in sb-apps namespace (where images are pulled)
+    log_info "Creating imagePullSecret 'awscred' in sb-apps namespace..."
+
+    kubectl create secret docker-registry awscred \
+        --docker-server="$ECR_REGISTRY" \
+        --docker-username=AWS \
+        --docker-password="$ECR_TOKEN" \
+        --namespace=sb-apps \
+        --dry-run=client -o yaml | kubectl apply -f -
+
+    # Also create in sb-system namespace
+    kubectl create secret docker-registry awscred \
+        --docker-server="$ECR_REGISTRY" \
+        --docker-username=AWS \
+        --docker-password="$ECR_TOKEN" \
+        --namespace=sb-system \
+        --dry-run=client -o yaml | kubectl apply -f -
+
+    log_info "ECR image pull secret 'awscred' created in sb-apps and sb-system namespaces"
+}
+
 # Parse arguments
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -147,6 +283,10 @@ parse_args() {
                 SKIP_DB_INSTALL=true
                 shift
                 ;;
+            --aws-creds-file)
+                AWS_CREDS_FILE="$2"
+                shift 2
+                ;;
             --skip-k8s-install)
                 SKIP_K8S_INSTALL=true
                 shift
@@ -173,12 +313,22 @@ show_help() {
     echo "  --ssl-key       Path to SSL private key file"
     echo ""
     echo "Optional:"
+    echo "  --aws-creds-file     Path to AWS credentials file (default: /etc/stackbill/aws-credentials)"
     echo "  --mysql-password     MySQL password (auto-generated if not provided)"
     echo "  --mongodb-password   MongoDB password (auto-generated if not provided)"
     echo "  --rabbitmq-password  RabbitMQ password (auto-generated if not provided)"
     echo "  --skip-db-install    Skip database installation (use existing)"
     echo "  --skip-k8s-install   Skip Kubernetes/Istio installation (use existing)"
     echo "  -h, --help           Show this help message"
+    echo ""
+    echo "AWS Credentials File Format (one per line):"
+    echo "  AWS_ACCESS_KEY_ID=your_access_key"
+    echo "  AWS_SECRET_ACCESS_KEY=your_secret_key"
+    echo ""
+    echo "Create the file:"
+    echo "  sudo mkdir -p /etc/stackbill"
+    echo "  sudo nano /etc/stackbill/aws-credentials"
+    echo "  sudo chmod 600 /etc/stackbill/aws-credentials"
 }
 
 # Validate inputs
@@ -1225,7 +1375,11 @@ main() {
     create_istio_routing
     setup_nodeport_access
 
-    # Phase 5: Deploy StackBill directly (NO UI - fully automated!)
+    # Phase 5: AWS ECR Authentication
+    load_aws_credentials
+    create_ecr_secret
+
+    # Phase 6: Deploy StackBill directly (NO UI - fully automated!)
     deploy_stackbill_direct
     wait_for_pods
 
