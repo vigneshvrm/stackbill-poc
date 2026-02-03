@@ -41,6 +41,8 @@ AWS_SECRET_ACCESS_KEY=""
 AWS_REGION="ap-south-1"
 AWS_ACCOUNT_ID="730335576030"
 AWS_CREDS_FILE="/etc/stackbill/aws-credentials"
+ECR_TOKEN_FILE="/etc/stackbill/ecr-token"
+ECR_TOKEN=""
 
 # Versions
 K3S_VERSION="v1.29.0+k3s1"
@@ -126,7 +128,26 @@ generate_passwords() {
 load_aws_credentials() {
     log_step "Loading AWS ECR Credentials"
 
-    # Check multiple possible locations for credentials file
+    # OPTION 1: Check for direct ECR token file first (simpler, no AWS CLI needed)
+    local token_locations=(
+        "$ECR_TOKEN_FILE"
+        "/etc/stackbill/ecr-token"
+        "$HOME/.stackbill/ecr-token"
+        "./ecr-token"
+    )
+
+    for loc in "${token_locations[@]}"; do
+        if [[ -f "$loc" ]]; then
+            log_info "Found ECR token file: $loc"
+            ECR_TOKEN=$(cat "$loc" | tr -d '\n\r ')
+            if [[ -n "$ECR_TOKEN" ]]; then
+                log_info "ECR token loaded directly (${#ECR_TOKEN} chars)"
+                return 0
+            fi
+        fi
+    done
+
+    # OPTION 2: Check for AWS credentials file
     local creds_locations=(
         "$AWS_CREDS_FILE"
         "/etc/stackbill/aws-credentials"
@@ -143,21 +164,17 @@ load_aws_credentials() {
     done
 
     if [[ -z "$found_file" ]]; then
-        log_error "AWS credentials file not found!"
-        log_error "Checked locations:"
-        for loc in "${creds_locations[@]}"; do
-            log_error "  - $loc"
-        done
+        log_error "No AWS credentials found!"
         log_error ""
-        log_error "Create the credentials file with:"
+        log_error "OPTION 1 - ECR Token file (simpler):"
         log_error "  sudo mkdir -p /etc/stackbill"
+        log_error "  echo 'YOUR_ECR_TOKEN' | sudo tee /etc/stackbill/ecr-token"
+        log_error "  sudo chmod 600 /etc/stackbill/ecr-token"
+        log_error ""
+        log_error "OPTION 2 - AWS Credentials file:"
         log_error "  sudo nano /etc/stackbill/aws-credentials"
-        log_error ""
-        log_error "File format (one per line):"
-        log_error "  AWS_ACCESS_KEY_ID=your_access_key"
-        log_error "  AWS_SECRET_ACCESS_KEY=your_secret_key"
-        log_error ""
-        log_error "Then secure the file:"
+        log_error "  # Add: AWS_ACCESS_KEY_ID=xxx"
+        log_error "  # Add: AWS_SECRET_ACCESS_KEY=xxx"
         log_error "  sudo chmod 600 /etc/stackbill/aws-credentials"
         exit 1
     fi
@@ -185,13 +202,22 @@ load_aws_credentials() {
             AWS_ACCOUNT_ID)
                 AWS_ACCOUNT_ID="$value"
                 ;;
+            ECR_TOKEN)
+                ECR_TOKEN="$value"
+                ;;
         esac
     done < "$found_file"
 
-    # Validate credentials
+    # If ECR_TOKEN was in credentials file, use it
+    if [[ -n "$ECR_TOKEN" ]]; then
+        log_info "ECR token loaded from credentials file"
+        return 0
+    fi
+
+    # Validate AWS credentials
     if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
         log_error "AWS credentials incomplete in $found_file"
-        log_error "Both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required"
+        log_error "Need either ECR_TOKEN or both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
         exit 1
     fi
 
@@ -205,30 +231,38 @@ create_ecr_secret() {
     log_step "Creating AWS ECR Image Pull Secret"
 
     local ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    local TOKEN_TO_USE=""
 
-    # Install AWS CLI if not present
-    if ! command -v aws &> /dev/null; then
-        log_info "Installing AWS CLI..."
-        apt-get update -qq
-        apt-get install -y -qq awscli
+    # If we already have ECR_TOKEN from file, use it directly
+    if [[ -n "$ECR_TOKEN" ]]; then
+        log_info "Using ECR token from file (no AWS CLI needed)"
+        TOKEN_TO_USE="$ECR_TOKEN"
+    else
+        # Need to get token via AWS CLI
+        log_info "Getting ECR token via AWS CLI..."
+
+        # Install AWS CLI if not present
+        if ! command -v aws &> /dev/null; then
+            log_info "Installing AWS CLI..."
+            apt-get update -qq
+            apt-get install -y -qq awscli
+        fi
+
+        # Configure AWS credentials
+        export AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+        export AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+        export AWS_DEFAULT_REGION="$AWS_REGION"
+
+        # Get ECR login token
+        TOKEN_TO_USE=$(aws ecr get-login-password --region "$AWS_REGION" 2>/dev/null)
+
+        if [[ -z "$TOKEN_TO_USE" ]]; then
+            log_error "Failed to get ECR login token. Check your AWS credentials."
+            exit 1
+        fi
+
+        log_info "ECR token obtained via AWS CLI"
     fi
-
-    # Configure AWS credentials
-    export AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
-    export AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
-    export AWS_DEFAULT_REGION="$AWS_REGION"
-
-    # Get ECR login token
-    log_info "Getting ECR login token..."
-    local ECR_TOKEN
-    ECR_TOKEN=$(aws ecr get-login-password --region "$AWS_REGION" 2>/dev/null)
-
-    if [[ -z "$ECR_TOKEN" ]]; then
-        log_error "Failed to get ECR login token. Check your AWS credentials."
-        exit 1
-    fi
-
-    log_info "ECR token obtained successfully"
 
     # Create secret in sb-apps namespace (where images are pulled)
     log_info "Creating imagePullSecret 'awscred' in sb-apps namespace..."
@@ -236,7 +270,7 @@ create_ecr_secret() {
     kubectl create secret docker-registry awscred \
         --docker-server="$ECR_REGISTRY" \
         --docker-username=AWS \
-        --docker-password="$ECR_TOKEN" \
+        --docker-password="$TOKEN_TO_USE" \
         --namespace=sb-apps \
         --dry-run=client -o yaml | kubectl apply -f -
 
@@ -244,7 +278,7 @@ create_ecr_secret() {
     kubectl create secret docker-registry awscred \
         --docker-server="$ECR_REGISTRY" \
         --docker-username=AWS \
-        --docker-password="$ECR_TOKEN" \
+        --docker-password="$TOKEN_TO_USE" \
         --namespace=sb-system \
         --dry-run=client -o yaml | kubectl apply -f -
 
@@ -321,14 +355,19 @@ show_help() {
     echo "  --skip-k8s-install   Skip Kubernetes/Istio installation (use existing)"
     echo "  -h, --help           Show this help message"
     echo ""
-    echo "AWS Credentials File Format (one per line):"
-    echo "  AWS_ACCESS_KEY_ID=your_access_key"
-    echo "  AWS_SECRET_ACCESS_KEY=your_secret_key"
+    echo "AWS ECR Authentication (choose one method):"
     echo ""
-    echo "Create the file:"
-    echo "  sudo mkdir -p /etc/stackbill"
-    echo "  sudo nano /etc/stackbill/aws-credentials"
-    echo "  sudo chmod 600 /etc/stackbill/aws-credentials"
+    echo "  METHOD 1 - ECR Token file (simpler, recommended):"
+    echo "    sudo mkdir -p /etc/stackbill"
+    echo "    echo 'YOUR_ECR_TOKEN' | sudo tee /etc/stackbill/ecr-token"
+    echo "    sudo chmod 600 /etc/stackbill/ecr-token"
+    echo ""
+    echo "  METHOD 2 - AWS Credentials file:"
+    echo "    sudo nano /etc/stackbill/aws-credentials"
+    echo "    # Add these lines:"
+    echo "    AWS_ACCESS_KEY_ID=your_access_key"
+    echo "    AWS_SECRET_ACCESS_KEY=your_secret_key"
+    echo "    sudo chmod 600 /etc/stackbill/aws-credentials"
 }
 
 # Validate inputs
