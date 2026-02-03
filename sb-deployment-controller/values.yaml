@@ -1,0 +1,65 @@
+# Default values for sb-deployment-controller.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+namespace:
+  name: sb-system
+
+# Gateway values
+gateways:
+  name: sb-nginx-gateway
+  ports:
+  - port:
+      name: http
+      protocol: HTTP
+      number: 80
+
+# Deployment values
+deployment:
+  replicaCount: 1
+  name: sb-deployment-controller
+  image:
+    repository: assistanzhub/sb-deployment-controller
+    pullPolicy: Always
+    tag: "v1.1.7"
+  ports:
+    - containerPort: 3000
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Service values
+service:
+  name: sb-deployment-controller
+  type: ClusterIP
+  ports:
+    - port:
+        name: http
+        protocol: TCP
+        number: 80
+        targetPort: 3000
+
+# Service Account Values
+serviceAccount:
+  name: sb-deployment-controller-service-account
+
+# ClusterRole values
+clusterRole:
+  name: sb-deployment-controller-cluster-role
+
+# ClusterRoleBinding Values
+clusterRoleBinding:
+  name: sb-deployment-controller-cluster-role-binding
+
+#VirtualService
+virtualService:
+  name: sb-deployment-controller
+  port: 80
+
+# Secrets
+secrets:
+  name: sb-deployment-controller-secrets
+
+# ConfigMaps
+configmap:
+  name: sb-deployment-controller-configmap

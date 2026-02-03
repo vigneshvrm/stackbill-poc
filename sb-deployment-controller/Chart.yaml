@@ -1,0 +1,10 @@
+apiVersion: v2
+appVersion: 1.16.0
+dependencies:
+- name: namespace
+  repository: file://./charts/namespace
+  version: 0.1.0
+description: A Helm chart for Stackbill deployment controller
+name: sb-deployment-controller
+type: application
+version: 0.1.0

@@ -66,11 +66,16 @@ print_banner() {
     echo "     This script will:                                                         "
     echo "       1. Install K3s Kubernetes (if needed)                                   "
     echo "       2. Install kubectl, Helm, Istio                                         "
-    echo "       3. Install MySQL, MongoDB, RabbitMQ on host                             "
+    echo "       3. Install MySQL, MongoDB, RabbitMQ on HOST (not in K8s)                "
     echo "       4. Setup NFS storage                                                    "
-    echo "       5. Deploy StackBill deployment controller                               "
+    echo "       5. Deploy sb-deployment-controller with AUTO_CONFIG                     "
     echo "                                                                               "
-    echo "     Passwords will be auto-generated and saved to credentials file.          "
+    echo "     The controller will be pre-configured with:                               "
+    echo "       - Database connections pointing to host IP                              "
+    echo "       - AUTO_CONFIG=true and SKIP_WIZARD=true                                 "
+    echo "       - All credentials in ConfigMaps and Secrets                             "
+    echo "                                                                               "
+    echo "     Passwords are auto-generated and saved to credentials file.               "
     echo "                                                                               "
     echo "==============================================================================="
     echo -e "${NC}"
@@ -164,19 +169,11 @@ load_aws_credentials() {
     done
 
     if [[ -z "$found_file" ]]; then
-        log_error "No AWS credentials found!"
-        log_error ""
-        log_error "OPTION 1 - ECR Token file (simpler):"
-        log_error "  sudo mkdir -p /etc/stackbill"
-        log_error "  echo 'YOUR_ECR_TOKEN' | sudo tee /etc/stackbill/ecr-token"
-        log_error "  sudo chmod 600 /etc/stackbill/ecr-token"
-        log_error ""
-        log_error "OPTION 2 - AWS Credentials file:"
-        log_error "  sudo nano /etc/stackbill/aws-credentials"
-        log_error "  # Add: AWS_ACCESS_KEY_ID=xxx"
-        log_error "  # Add: AWS_SECRET_ACCESS_KEY=xxx"
-        log_error "  sudo chmod 600 /etc/stackbill/aws-credentials"
-        exit 1
+        log_warn "No AWS credentials found"
+        log_info "To enable ECR image pulling, create one of:"
+        log_info "  /etc/stackbill/ecr-token - with ECR token"
+        log_info "  /etc/stackbill/aws-credentials - with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+        return 1
     fi
 
     log_info "Found credentials file: $found_file"
@@ -1072,87 +1069,207 @@ EOF
     log_info "Istio Gateway created"
 }
 
-# Deploy StackBill directly from AWS ECR (bypassing sb-deployment-controller UI)
-deploy_stackbill_direct() {
-    log_step "Deploying StackBill Application (Direct from AWS ECR)"
+# Deploy StackBill using LOCAL chart with external database configuration
+deploy_stackbill_local() {
+    log_step "Deploying StackBill (LOCAL Chart with External Databases)"
 
-    # StackBill Helm chart is in AWS Public ECR
-    STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
+    log_info "Using LOCAL chart at: $CHART_DIR"
+    log_info "This deploys the sb-deployment-controller with AUTO_CONFIG enabled"
+    log_info "Databases will be accessed directly via host IP: $SERVER_IP"
 
-    log_info "Deploying StackBill from: $STACKBILL_CHART"
-    log_info "This deploys the actual StackBill application directly - NO UI WIZARD!"
-
-    # Create required namespaces (StackBill chart expects these)
+    # Create required namespaces
     log_info "Creating required namespaces..."
     for ns in sb-apps sb-system; do
         if ! kubectl get namespace $ns &> /dev/null; then
             kubectl create namespace $ns
-            kubectl label namespace $ns istio-injection=enabled --overwrite
-            log_info "Namespace $ns created with Istio injection"
+            log_info "Namespace $ns created"
         fi
+        kubectl label namespace $ns istio-injection=enabled --overwrite 2>/dev/null || true
     done
 
-    # Deploy StackBill with all credentials
-    helm upgrade --install stackbill "$STACKBILL_CHART" \
+    # Add Helm ownership labels to namespace
+    kubectl label namespace $NAMESPACE app.kubernetes.io/managed-by=Helm --overwrite
+    kubectl annotate namespace $NAMESPACE meta.helm.sh/release-name=stackbill --overwrite
+    kubectl annotate namespace $NAMESPACE meta.helm.sh/release-namespace=$NAMESPACE --overwrite
+
+    # Update Helm dependencies
+    log_info "Updating Helm chart dependencies..."
+    cd "$CHART_DIR"
+    helm dependency update . 2>/dev/null || helm dependency build .
+
+    # Deploy using LOCAL chart with EXTERNAL database settings
+    # Key settings:
+    # - mysql.enabled=false (don't deploy MySQL in K8s)
+    # - mongodb.enabled=false (don't deploy MongoDB in K8s)
+    # - rabbitmq.enabled=false (don't deploy RabbitMQ in K8s)
+    # - external.mysql.host=SERVER_IP (use host-installed MySQL)
+    # - external.mongodb.host=SERVER_IP (use host-installed MongoDB)
+    # - external.rabbitmq.host=SERVER_IP (use host-installed RabbitMQ)
+
+    log_info "Deploying with external database configuration..."
+
+    helm upgrade --install stackbill . \
         --namespace $NAMESPACE \
         --timeout 600s \
-        --set global.domain="$DOMAIN" \
-        --set global.nfs.server="$SERVER_IP" \
-        --set global.nfs.path="/data/stackbill" \
-        --set global.mysql.ip="$SERVER_IP" \
-        --set global.mysql.username="stackbill" \
-        --set global.mysql.password="$MYSQL_PASSWORD" \
-        --set global.mongo.ip="$SERVER_IP" \
-        --set global.mongo.username="stackbill" \
-        --set global.mongo.password="$MONGODB_PASSWORD" \
-        --set global.rabbitmq.ip="$SERVER_IP" \
-        --set global.rabbitmq.username="stackbill" \
-        --set global.rabbitmq.password="$RABBITMQ_PASSWORD"
+        --set global.mode=poc \
+        --set domain.name="$DOMAIN" \
+        --set-file ssl.certificate="$SSL_CERT" \
+        --set-file ssl.privateKey="$SSL_KEY" \
+        --set mysql.enabled=false \
+        --set mongodb.enabled=false \
+        --set rabbitmq.enabled=false \
+        --set external.mysql.host="$SERVER_IP" \
+        --set external.mysql.port=3306 \
+        --set external.mysql.database=stackbill \
+        --set external.mysql.username=stackbill \
+        --set external.mysql.password="$MYSQL_PASSWORD" \
+        --set external.mongodb.host="$SERVER_IP" \
+        --set external.mongodb.port=27017 \
+        --set external.mongodb.database=stackbill_usage \
+        --set external.mongodb.username=stackbill \
+        --set external.mongodb.password="$MONGODB_PASSWORD" \
+        --set external.rabbitmq.host="$SERVER_IP" \
+        --set external.rabbitmq.port=5672 \
+        --set external.rabbitmq.username=stackbill \
+        --set external.rabbitmq.password="$RABBITMQ_PASSWORD" \
+        --set external.nfs.server="$SERVER_IP" \
+        --set external.nfs.path="/data/stackbill" \
+        --set nfs.provisioner.enabled=false
 
-    log_info "StackBill deployment initiated"
+    log_info "StackBill deployment initiated with external databases"
+
+    # Show what was created
+    log_info "Checking created resources..."
+    kubectl get configmap -n $NAMESPACE -l app.kubernetes.io/name=stackbill 2>/dev/null || true
+    kubectl get secret -n $NAMESPACE -l app.kubernetes.io/name=stackbill 2>/dev/null || true
 }
 
 # Wait for pods
 wait_for_pods() {
-    log_step "Waiting for pods to be ready"
+    log_step "Waiting for sb-deployment-controller to be ready"
 
-    local timeout=300
+    local timeout=180
     local elapsed=0
 
+    # Wait specifically for the deployment controller pod
+    log_info "Waiting for sb-deployment-controller pod..."
+
     while [[ $elapsed -lt $timeout ]]; do
-        # Get ready count - handle multiple values by taking first number
-        local ready_output=$(kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-        local ready=$(echo "$ready_output" | tr ' ' '\n' | grep -c "True" 2>/dev/null || echo "0")
+        local status=$(kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
 
-        # Get total count - trim whitespace
-        local total=$(kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-
-        # Ensure we have numeric values
-        ready=${ready:-0}
-        total=${total:-0}
-
-        if [[ "$total" =~ ^[0-9]+$ ]] && [[ "$ready" =~ ^[0-9]+$ ]] && [[ $total -gt 0 ]] && [[ $ready -eq $total ]]; then
-            echo ""
-            log_info "All pods are ready ($ready/$total)"
-            return 0
+        if [[ "$status" == "Running" ]]; then
+            # Check if containers are ready
+            local ready=$(kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+            if [[ "$ready" == "true" ]]; then
+                echo ""
+                log_info "sb-deployment-controller is ready!"
+                kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller
+                return 0
+            fi
         fi
 
-        printf "\r${YELLOW}[WAIT]${NC} Pods ready: %s/%s (%ds)" "$ready" "$total" "$elapsed"
+        printf "\r${YELLOW}[WAIT]${NC} Controller status: %s (%ds)" "$status" "$elapsed"
         sleep 5
         elapsed=$((elapsed + 5))
     done
 
     echo ""
-    log_warn "Timeout waiting for pods. Check: kubectl get pods -n $NAMESPACE"
+    log_warn "Timeout waiting for controller. Current status:"
+    kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller
+    kubectl describe pod -n $NAMESPACE -l app=sb-deployment-controller | tail -20
 }
 
 # ============================================
 # AUTO-CONFIGURE DEPLOYMENT CONTROLLER
 # ============================================
 
+# Verify deployment worked correctly
+verify_deployment() {
+    log_step "Verifying Deployment"
+
+    local all_ok=true
+
+    # Check if configmaps were created
+    log_info "Checking ConfigMaps..."
+    if kubectl get configmap stackbill-app-config -n $NAMESPACE &>/dev/null; then
+        echo -e "  stackbill-app-config:       ${GREEN}OK${NC}"
+
+        # Show config content (first 10 lines)
+        log_info "Config content (sample):"
+        kubectl get configmap stackbill-app-config -n $NAMESPACE -o jsonpath='{.data.config\.json}' 2>/dev/null | head -c 500
+        echo ""
+    else
+        echo -e "  stackbill-app-config:       ${RED}MISSING${NC}"
+        all_ok=false
+    fi
+
+    if kubectl get configmap stackbill-poc-config -n $NAMESPACE &>/dev/null; then
+        echo -e "  stackbill-poc-config:       ${GREEN}OK${NC}"
+    else
+        echo -e "  stackbill-poc-config:       ${YELLOW}NOT CREATED (OK if not POC mode)${NC}"
+    fi
+
+    # Check if secrets were created
+    log_info "Checking Secrets..."
+    if kubectl get secret stackbill-auto-credentials -n $NAMESPACE &>/dev/null; then
+        echo -e "  stackbill-auto-credentials: ${GREEN}OK${NC}"
+
+        # Verify it contains external IPs, not service names
+        local mysql_host=$(kubectl get secret stackbill-auto-credentials -n $NAMESPACE -o jsonpath='{.data.MYSQL_HOST}' | base64 -d 2>/dev/null)
+        if [[ "$mysql_host" == "$SERVER_IP" ]]; then
+            echo -e "  MySQL Host in secret:       ${GREEN}$mysql_host (correct)${NC}"
+        else
+            echo -e "  MySQL Host in secret:       ${YELLOW}$mysql_host (expected $SERVER_IP)${NC}"
+        fi
+    else
+        echo -e "  stackbill-auto-credentials: ${RED}MISSING${NC}"
+        all_ok=false
+    fi
+
+    # Check if controller pod is running
+    log_info "Checking Controller Pod..."
+    if kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller --no-headers 2>/dev/null | grep -q "Running"; then
+        echo -e "  sb-deployment-controller:   ${GREEN}RUNNING${NC}"
+
+        # Check if it has the config mounted
+        local pod_name=$(kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [[ -n "$pod_name" ]]; then
+            log_info "Checking controller configuration..."
+
+            # Check environment variables
+            local auto_config=$(kubectl exec -n $NAMESPACE "$pod_name" -- printenv AUTO_CONFIG 2>/dev/null || echo "")
+            local skip_wizard=$(kubectl exec -n $NAMESPACE "$pod_name" -- printenv SKIP_WIZARD 2>/dev/null || echo "")
+            local mysql_host=$(kubectl exec -n $NAMESPACE "$pod_name" -- printenv MYSQL_HOST 2>/dev/null || echo "")
+
+            echo "  AUTO_CONFIG=$auto_config"
+            echo "  SKIP_WIZARD=$skip_wizard"
+            echo "  MYSQL_HOST=$mysql_host"
+
+            # Check if config file exists
+            if kubectl exec -n $NAMESPACE "$pod_name" -- test -f /app/config/config.json 2>/dev/null; then
+                echo -e "  Config file mounted:        ${GREEN}YES${NC}"
+            else
+                echo -e "  Config file mounted:        ${YELLOW}NO${NC}"
+            fi
+        fi
+    else
+        echo -e "  sb-deployment-controller:   ${RED}NOT RUNNING${NC}"
+        all_ok=false
+    fi
+
+    # Summary
+    echo ""
+    if $all_ok; then
+        log_info "Deployment verification PASSED"
+        log_info "The controller should auto-configure using the mounted credentials"
+    else
+        log_warn "Deployment verification had issues - check above"
+    fi
+}
+
 # Auto-configure the deployment controller via API
 auto_configure_controller() {
-    log_step "Auto-configuring StackBill Deployment Controller"
+    log_step "Auto-configuring StackBill Deployment Controller via API"
 
     # Wait for pod to be fully ready
     log_info "Waiting for sb-deployment-controller to be fully ready..."
@@ -1162,16 +1279,40 @@ auto_configure_controller() {
     local POD_NAME=$(kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller -o jsonpath='{.items[0].metadata.name}')
     log_info "Pod: $POD_NAME"
 
+    # Try to discover API routes from container filesystem
+    log_info "Discovering API endpoints from container..."
+
+    # Look for route definitions in the Node.js app
+    local api_routes=$(kubectl exec -n $NAMESPACE "$POD_NAME" -- sh -c "grep -r 'app\.\(get\|post\|put\)' /app/*.js /app/routes/*.js 2>/dev/null | head -20" 2>/dev/null || echo "")
+    if [[ -n "$api_routes" ]]; then
+        log_info "Found API routes in container:"
+        echo "$api_routes" | head -10
+    fi
+
+    # Look for any package.json or server entry point
+    local server_files=$(kubectl exec -n $NAMESPACE "$POD_NAME" -- sh -c "ls -la /app/*.js /app/routes/ 2>/dev/null" 2>/dev/null || echo "")
+    if [[ -n "$server_files" ]]; then
+        log_info "Container app files:"
+        echo "$server_files" | head -5
+    fi
+
     # Start port-forward in background
-    log_info "Setting up port-forward..."
+    log_info "Setting up port-forward to controller..."
     kubectl port-forward "pod/$POD_NAME" 8888:3000 -n $NAMESPACE &
     local PF_PID=$!
     sleep 5
 
-    # Try to configure via API
-    log_info "Attempting auto-configuration via API..."
+    # Check if port-forward is working
+    if ! curl -s -o /dev/null -w "" http://localhost:8888/ &>/dev/null; then
+        log_warn "Port-forward may not be working. Trying service..."
+        kill $PF_PID 2>/dev/null || true
 
-    # Prepare configuration payload
+        kubectl port-forward "svc/sb-deployment-controller" 8888:80 -n $NAMESPACE &
+        PF_PID=$!
+        sleep 5
+    fi
+
+    # Prepare configuration payload (matching the expected format from the UI)
     local CONFIG_PAYLOAD=$(cat <<EOF
 {
     "mysql": {
@@ -1198,71 +1339,155 @@ auto_configure_controller() {
         "server": "$SERVER_IP",
         "path": "/data/stackbill"
     },
+    "domain": "$DOMAIN",
+    "ssl": {
+        "certificate": "$(cat $SSL_CERT | base64 -w0)",
+        "privateKey": "$(cat $SSL_KEY | base64 -w0)"
+    }
+}
+EOF
+)
+
+    # Also prepare a simpler form-like payload
+    local FORM_PAYLOAD=$(cat <<EOF
+{
+    "mysqlHost": "$SERVER_IP",
+    "mysqlPort": "3306",
+    "mysqlDatabase": "stackbill",
+    "mysqlUsername": "stackbill",
+    "mysqlPassword": "$MYSQL_PASSWORD",
+    "mongodbHost": "$SERVER_IP",
+    "mongodbPort": "27017",
+    "mongodbDatabase": "stackbill_usage",
+    "mongodbUsername": "stackbill",
+    "mongodbPassword": "$MONGODB_PASSWORD",
+    "rabbitmqHost": "$SERVER_IP",
+    "rabbitmqPort": "5672",
+    "rabbitmqUsername": "stackbill",
+    "rabbitmqPassword": "$RABBITMQ_PASSWORD",
+    "nfsServer": "$SERVER_IP",
+    "nfsPath": "/data/stackbill",
     "domain": "$DOMAIN"
 }
 EOF
 )
 
-    # Try common API endpoints
+    # Try to configure via API
+    log_info "Sending configuration to controller API..."
+
+    # Common API endpoints to try
     local ENDPOINTS=(
+        "/api/configuration"
         "/api/setup"
         "/api/config"
+        "/api/deploy"
+        "/api/install"
+        "/api/v1/configuration"
         "/api/v1/setup"
         "/api/v1/config"
-        "/api/configuration"
-        "/api/init"
+        "/api/v1/deploy"
+        "/configuration"
         "/setup"
+        "/deploy"
         "/config"
     )
 
     local CONFIG_SUCCESS=false
 
-    for endpoint in "${ENDPOINTS[@]}"; do
-        log_info "Trying endpoint: $endpoint"
+    # First, probe GET endpoints to understand the API
+    log_info "Probing API endpoints..."
+    for probe in "/" "/api" "/health" "/status" "/api/status"; do
+        local probe_http=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8888$probe" 2>/dev/null || echo "000")
+        local probe_response=$(curl -s "http://localhost:8888$probe" 2>/dev/null | head -c 300 || echo "")
 
-        local response=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "http://localhost:8888$endpoint" \
-            -H "Content-Type: application/json" \
-            -d "$CONFIG_PAYLOAD" 2>/dev/null || echo "000")
-
-        if [[ "$response" == "200" || "$response" == "201" ]]; then
-            log_info "Configuration successful via $endpoint (HTTP $response)"
-            CONFIG_SUCCESS=true
-            break
-        elif [[ "$response" != "404" && "$response" != "000" ]]; then
-            log_info "Endpoint $endpoint returned HTTP $response"
+        if [[ "$probe_http" != "000" && "$probe_http" != "404" ]]; then
+            log_info "  $probe -> HTTP $probe_http"
+            if [[ -n "$probe_response" && ! "$probe_response" =~ "<!DOCTYPE" ]]; then
+                echo "    Response: ${probe_response:0:150}..."
+            fi
         fi
     done
 
-    # Try GET to discover API routes
+    # Try POST with JSON payload
+    for endpoint in "${ENDPOINTS[@]}"; do
+        log_info "Trying POST $endpoint with JSON..."
+
+        local response=$(curl -s -w "\n%{http_code}" \
+            -X POST "http://localhost:8888$endpoint" \
+            -H "Content-Type: application/json" \
+            -d "$CONFIG_PAYLOAD" 2>/dev/null || echo -e "\n000")
+
+        local body=$(echo "$response" | head -n -1)
+        local http_code=$(echo "$response" | tail -n 1)
+
+        if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "202" ]]; then
+            log_info "SUCCESS! Configuration sent via $endpoint (HTTP $http_code)"
+            log_info "Response: $body"
+            CONFIG_SUCCESS=true
+            break
+        elif [[ "$http_code" != "404" && "$http_code" != "000" && "$http_code" != "405" ]]; then
+            log_info "  $endpoint -> HTTP $http_code: ${body:0:100}"
+        fi
+    done
+
+    # Try with form-style payload if JSON didn't work
     if [[ "$CONFIG_SUCCESS" == "false" ]]; then
-        log_info "Probing API discovery endpoints..."
-        for probe in "/api" "/api/v1" "/swagger" "/openapi" "/health" "/"; do
-            local probe_response=$(curl -s "http://localhost:8888$probe" 2>/dev/null | head -c 500)
-            if [[ -n "$probe_response" && "$probe_response" != *"<!DOCTYPE"* ]]; then
-                log_info "API response from $probe: ${probe_response:0:200}..."
+        log_info "Trying with alternative payload format..."
+        for endpoint in "${ENDPOINTS[@]}"; do
+            local response=$(curl -s -w "\n%{http_code}" \
+                -X POST "http://localhost:8888$endpoint" \
+                -H "Content-Type: application/json" \
+                -d "$FORM_PAYLOAD" 2>/dev/null || echo -e "\n000")
+
+            local http_code=$(echo "$response" | tail -n 1)
+
+            if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "202" ]]; then
+                log_info "SUCCESS with form payload! via $endpoint (HTTP $http_code)"
+                CONFIG_SUCCESS=true
+                break
             fi
         done
     fi
 
     # Stop port-forward
     kill $PF_PID 2>/dev/null || true
+    wait $PF_PID 2>/dev/null || true
 
     if [[ "$CONFIG_SUCCESS" == "true" ]]; then
         log_info "Auto-configuration completed successfully!"
+        log_info "The controller should now deploy StackBill applications."
+
+        # Wait a bit and check for new pods
+        log_info "Waiting for StackBill applications to be deployed..."
+        sleep 30
+
+        log_info "Checking for deployed applications:"
+        kubectl get pods -n sb-apps 2>/dev/null || true
+        kubectl get pods -n $NAMESPACE 2>/dev/null || true
     else
         log_warn "Auto-configuration via API was not successful."
-        log_warn "The application may require manual configuration through the UI."
+        log_warn "This is expected if the controller requires UI interaction."
         log_info ""
-        log_info "Access the UI to configure manually:"
-        log_info "  NodePort: http://$SERVER_IP:31331"
-        log_info "  Or use: kubectl port-forward svc/sb-deployment-controller 8080:80 -n $NAMESPACE"
+        log_info "============================================================"
+        log_info "MANUAL CONFIGURATION REQUIRED"
+        log_info "============================================================"
         log_info ""
-        log_info "Enter these credentials in the configuration wizard:"
+        log_info "Access the controller UI at:"
+        log_info "  http://$SERVER_IP:31331"
+        log_info ""
+        log_info "Or use port-forward:"
+        log_info "  kubectl port-forward svc/sb-deployment-controller 8080:80 -n $NAMESPACE"
+        log_info "  Then open: http://localhost:8080"
+        log_info ""
+        log_info "Enter these credentials in the wizard:"
+        log_info "  Domain: $DOMAIN"
         log_info "  MySQL: $SERVER_IP:3306 | stackbill | $MYSQL_PASSWORD"
         log_info "  MongoDB: $SERVER_IP:27017 | stackbill | $MONGODB_PASSWORD"
         log_info "  RabbitMQ: $SERVER_IP:5672 | stackbill | $RABBITMQ_PASSWORD"
-        log_info "  NFS: $SERVER_IP | /data/stackbill"
+        log_info "  NFS Server: $SERVER_IP | Path: /data/stackbill"
+        log_info ""
+        log_info "These credentials are saved in: $HOME/stackbill-credentials.txt"
+        log_info "============================================================"
     fi
 }
 
@@ -1340,43 +1565,52 @@ print_summary() {
     echo -e "${GREEN}                      DEPLOYMENT COMPLETE!                                    ${NC}"
     echo -e "${GREEN}===============================================================================${NC}"
     echo ""
-    echo -e "${CYAN}ACCESS OPTIONS:${NC}"
+    echo -e "${CYAN}WHAT WAS DEPLOYED:${NC}"
+    echo "  - K3s Kubernetes cluster"
+    echo "  - Istio service mesh"
+    echo "  - MySQL on host ($SERVER_IP:3306)"
+    echo "  - MongoDB on host ($SERVER_IP:27017)"
+    echo "  - RabbitMQ on host ($SERVER_IP:5672)"
+    echo "  - NFS storage at /data/stackbill"
+    echo "  - sb-deployment-controller (with AUTO_CONFIG enabled)"
     echo ""
-    echo -e "  1. Via NodePort (works immediately):"
+    echo -e "${CYAN}CONFIGURATION STATUS:${NC}"
+    echo "  The controller has been deployed with:"
+    echo "  - AUTO_CONFIG=true"
+    echo "  - SKIP_WIZARD=true"
+    echo "  - Database credentials pre-configured (using host IPs)"
+    echo ""
+    echo -e "${CYAN}ACCESS THE CONTROLLER:${NC}"
+    echo ""
+    echo -e "  1. Via Istio Ingress (NodePort):"
     echo -e "     ${CYAN}http://$SERVER_IP:31331${NC}"
     echo ""
-    echo -e "  2. Via Domain (requires DNS pointing to this server):"
+    echo -e "  2. Via Domain (after DNS setup):"
     echo -e "     ${CYAN}https://$DOMAIN${NC}"
     echo ""
-    echo -e "${YELLOW}IMPORTANT: Save these auto-generated credentials!${NC}"
+    echo -e "  3. Via port-forward (for testing):"
+    echo "     kubectl port-forward svc/sb-deployment-controller 8080:80 -n $NAMESPACE"
+    echo -e "     Then access: ${CYAN}http://localhost:8080${NC}"
+    echo ""
+    echo -e "${YELLOW}IMPORTANT: Save these credentials!${NC}"
     echo "Credentials file: $HOME/stackbill-credentials.txt"
     echo ""
-    echo "Database connection details:"
-    echo "  MySQL:    $SERVER_IP:3306"
-    echo "    Username: stackbill"
-    echo "    Password: $MYSQL_PASSWORD"
-    echo ""
-    echo "  MongoDB:  $SERVER_IP:27017"
-    echo "    Username: stackbill"
-    echo "    Password: $MONGODB_PASSWORD"
-    echo ""
-    echo "  RabbitMQ: $SERVER_IP:5672"
-    echo "    Username: stackbill"
-    echo "    Password: $RABBITMQ_PASSWORD"
-    echo "    Management UI: http://$SERVER_IP:15672"
+    echo "Database connection details (pre-configured in controller):"
+    echo "  MySQL:    $SERVER_IP:3306 | stackbill / $MYSQL_PASSWORD"
+    echo "  MongoDB:  $SERVER_IP:27017 | stackbill / $MONGODB_PASSWORD"
+    echo "  RabbitMQ: $SERVER_IP:5672 | stackbill / $RABBITMQ_PASSWORD"
+    echo "            Management: http://$SERVER_IP:15672"
     echo ""
     echo "Useful commands:"
     echo "  kubectl get pods -n $NAMESPACE"
-    echo "  kubectl get svc -n $NAMESPACE"
+    echo "  kubectl logs -f -l app=sb-deployment-controller -n $NAMESPACE"
+    echo "  kubectl get configmap stackbill-app-config -n $NAMESPACE -o yaml"
     echo ""
-    echo "StackBill deployed directly from AWS ECR - NO UI WIZARD!"
-    echo "All services should be running. Check pods status above."
+    echo "Controller Pod Status:"
+    kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller 2>/dev/null || true
     echo ""
-    echo "Istio Ingress Gateway:"
-    kubectl get svc istio-ingressgateway -n istio-system -o wide 2>/dev/null || true
-    echo ""
-    echo "Pods status:"
-    kubectl get pods -n $NAMESPACE 2>/dev/null || true
+    echo "All ConfigMaps and Secrets:"
+    kubectl get configmap,secret -n $NAMESPACE -l app.kubernetes.io/name=stackbill 2>/dev/null || true
     echo ""
 }
 
@@ -1414,13 +1648,26 @@ main() {
     create_istio_routing
     setup_nodeport_access
 
-    # Phase 5: AWS ECR Authentication
-    load_aws_credentials
-    create_ecr_secret
+    # Phase 5: AWS ECR Authentication (for StackBill app images)
+    # This creates the image pull secret that the controller will use
+    if load_aws_credentials 2>/dev/null; then
+        create_ecr_secret
+    else
+        log_warn "AWS ECR credentials not found - skipping ECR secret creation"
+        log_warn "If StackBill apps need ECR images, deployment may fail"
+    fi
 
-    # Phase 6: Deploy StackBill directly (NO UI - fully automated!)
-    deploy_stackbill_direct
+    # Phase 6: Deploy using LOCAL chart with external databases
+    # This deploys sb-deployment-controller with AUTO_CONFIG enabled
+    deploy_stackbill_local
     wait_for_pods
+
+    # Phase 7: Verify deployment
+    verify_deployment
+
+    # Phase 8: Call controller API to submit credentials and trigger deployment
+    # This is the key step - we send the database details via API like the frontend would
+    auto_configure_controller
 
     # Finish
     save_credentials
