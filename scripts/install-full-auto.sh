@@ -831,40 +831,86 @@ setup_namespace() {
     log_info "Namespace configured with Istio and Helm labels"
 }
 
-# Deploy Helm chart
-deploy_helm() {
-    log_step "Deploying StackBill Helm chart"
+# Create TLS Secret for SSL
+create_tls_secret() {
+    log_step "Creating TLS Secret for SSL"
 
-    # Change to chart directory (CHART_DIR computed at script start)
-    cd "$CHART_DIR"
-    log_info "Working from chart directory: $CHART_DIR"
+    # Create TLS secret from certificate files
+    kubectl create secret tls stackbill-tls \
+        --cert="$SSL_CERT" \
+        --key="$SSL_KEY" \
+        --namespace=$NAMESPACE \
+        --dry-run=client -o yaml | kubectl apply -f -
 
-    # Build dependencies first
-    log_info "Building Helm dependencies..."
-    helm dependency build . 2>/dev/null || helm dependency update . 2>/dev/null || true
+    log_info "TLS secret 'stackbill-tls' created"
+}
 
-    # Deploy with external services configuration
-    log_info "Deploying sb-deployment-controller..."
+# Create Istio Gateway and VirtualService
+create_istio_routing() {
+    log_step "Creating Istio Gateway and VirtualService"
 
-    helm upgrade --install stackbill . \
+    # Create Gateway
+    cat <<EOF | kubectl apply -f -
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: stackbill-gateway
+  namespace: $NAMESPACE
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "$DOMAIN"
+    - "*"
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: stackbill-tls
+    hosts:
+    - "$DOMAIN"
+    - "*"
+EOF
+
+    # Create VirtualService - will be updated after we know service names
+    log_info "Istio Gateway created"
+}
+
+# Deploy StackBill directly from AWS ECR (bypassing sb-deployment-controller UI)
+deploy_stackbill_direct() {
+    log_step "Deploying StackBill Application (Direct from AWS ECR)"
+
+    # StackBill Helm chart is in AWS Public ECR
+    STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
+
+    log_info "Deploying StackBill from: $STACKBILL_CHART"
+    log_info "This deploys the actual StackBill application directly - NO UI WIZARD!"
+
+    # Deploy StackBill with all credentials
+    helm upgrade --install stackbill "$STACKBILL_CHART" \
         --namespace $NAMESPACE \
         --timeout 600s \
-        --set domain.name="$DOMAIN" \
-        --set-file ssl.certificate="$SSL_CERT" \
-        --set-file ssl.privateKey="$SSL_KEY" \
-        --set mysql.enabled=false \
-        --set mongodb.enabled=false \
-        --set rabbitmq.enabled=false \
-        --set external.mysql.host="$SERVER_IP" \
-        --set external.mysql.password="$MYSQL_PASSWORD" \
-        --set external.mongodb.host="$SERVER_IP" \
-        --set external.mongodb.password="$MONGODB_PASSWORD" \
-        --set external.rabbitmq.host="$SERVER_IP" \
-        --set external.rabbitmq.password="$RABBITMQ_PASSWORD" \
-        --set external.nfs.server="$SERVER_IP" \
-        --set external.nfs.path="/data/stackbill"
+        --set global.domain="$DOMAIN" \
+        --set global.nfs.server="$SERVER_IP" \
+        --set global.nfs.path="/data/stackbill" \
+        --set global.mysql.ip="$SERVER_IP" \
+        --set global.mysql.username="stackbill" \
+        --set global.mysql.password="$MYSQL_PASSWORD" \
+        --set global.mongo.ip="$SERVER_IP" \
+        --set global.mongo.username="stackbill" \
+        --set global.mongo.password="$MONGODB_PASSWORD" \
+        --set global.rabbitmq.ip="$SERVER_IP" \
+        --set global.rabbitmq.username="stackbill" \
+        --set global.rabbitmq.password="$RABBITMQ_PASSWORD"
 
-    log_info "Helm deployment complete"
+    log_info "StackBill deployment initiated"
 }
 
 # Wait for pods
@@ -1122,10 +1168,16 @@ print_summary() {
     echo ""
     echo "Useful commands:"
     echo "  kubectl get pods -n $NAMESPACE"
-    echo "  kubectl logs -f deployment/sb-deployment-controller -n $NAMESPACE"
+    echo "  kubectl get svc -n $NAMESPACE"
+    echo ""
+    echo "StackBill deployed directly from AWS ECR - NO UI WIZARD!"
+    echo "All services should be running. Check pods status above."
     echo ""
     echo "Istio Ingress Gateway:"
     kubectl get svc istio-ingressgateway -n istio-system -o wide 2>/dev/null || true
+    echo ""
+    echo "Pods status:"
+    kubectl get pods -n $NAMESPACE 2>/dev/null || true
     echo ""
 }
 
@@ -1159,12 +1211,13 @@ main() {
 
     # Phase 4: Deploy to Kubernetes
     setup_namespace
-    deploy_helm
-    wait_for_pods
-
-    # Phase 5: Auto-configure the application
+    create_tls_secret
+    create_istio_routing
     setup_nodeport_access
-    auto_configure_controller
+
+    # Phase 5: Deploy StackBill directly (NO UI - fully automated!)
+    deploy_stackbill_direct
+    wait_for_pods
 
     # Finish
     save_credentials
