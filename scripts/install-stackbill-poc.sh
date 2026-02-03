@@ -391,13 +391,22 @@ setup_nfs() {
 deploy_controller() {
     log_step "Deploying sb-deployment-controller"
 
-    # Create namespace
-    kubectl create namespace $NAMESPACE 2>/dev/null || true
-    kubectl label namespace $NAMESPACE istio-injection=enabled --overwrite 2>/dev/null || true
+    # Create namespace with Helm ownership labels
+    if ! kubectl get namespace $NAMESPACE &>/dev/null; then
+        kubectl create namespace $NAMESPACE
+    fi
+
+    # Add Helm ownership labels (required for Helm to manage the namespace)
+    kubectl label namespace $NAMESPACE istio-injection=enabled --overwrite
+    kubectl label namespace $NAMESPACE app.kubernetes.io/managed-by=Helm --overwrite
+    kubectl annotate namespace $NAMESPACE meta.helm.sh/release-name=sb-deployment-controller --overwrite
+    kubectl annotate namespace $NAMESPACE meta.helm.sh/release-namespace=$NAMESPACE --overwrite
 
     # Create sb-apps namespace for StackBill pods
-    kubectl create namespace sb-apps 2>/dev/null || true
-    kubectl label namespace sb-apps istio-injection=enabled --overwrite 2>/dev/null || true
+    if ! kubectl get namespace sb-apps &>/dev/null; then
+        kubectl create namespace sb-apps
+    fi
+    kubectl label namespace sb-apps istio-injection=enabled --overwrite
 
     # Deploy official controller chart
     log_info "Deploying from: $CONTROLLER_CHART"
