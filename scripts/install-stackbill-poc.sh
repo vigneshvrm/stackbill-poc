@@ -1,23 +1,15 @@
 #!/bin/bash
 # ============================================
-# STACKBILL POC INSTALLER - CLEAN VERSION
+# STACKBILL POC INSTALLER - FULLY AUTOMATED
 # ============================================
-# Uses the OFFICIAL sb-deployment-controller chart
-#
-# This script:
-# 1. Installs K3s, Helm, Istio (if needed)
-# 2. Installs MySQL, MongoDB, RabbitMQ on HOST
-# 3. Deploys official sb-deployment-controller
-# 4. Tries to auto-configure via API
-# 5. Falls back to manual UI if needed
+# Installs StackBill directly from AWS ECR
+# NO UI wizard required - completely automated
 #
 # Usage:
 #   sudo ./install-stackbill-poc.sh --domain DOMAIN --ssl-cert CERT --ssl-key KEY
 # ============================================
 
 set -e
-
-# Error trap for debugging
 trap 'echo "ERROR: Script failed at line $LINENO with exit code $?" >&2' ERR
 
 # Colors
@@ -29,14 +21,10 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Configuration
-NAMESPACE="sb-system"
+STACKBILL_NAMESPACE="sb-apps"
 K3S_VERSION="v1.29.0+k3s1"
 ISTIO_VERSION="1.20.3"
-
-# Script location
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CHART_DIR="$(dirname "$SCRIPT_DIR")"
-CONTROLLER_CHART="$CHART_DIR/sb-deployment-controller"
+STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
 
 # User inputs
 DOMAIN=""
@@ -48,6 +36,11 @@ EMAIL="admin@stackbill.local"
 MYSQL_PASSWORD=""
 MONGODB_PASSWORD=""
 RABBITMQ_PASSWORD=""
+SERVER_IP=""
+
+# Flags
+SKIP_INFRA=false
+SKIP_DB=false
 
 # Logging
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -60,26 +53,23 @@ log_step() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
 }
 
-# Banner
 print_banner() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════════╗"
-    echo "║           STACKBILL POC INSTALLER (Clean Version)            ║"
+    echo "║         STACKBILL POC INSTALLER - FULLY AUTOMATED            ║"
     echo "╠═══════════════════════════════════════════════════════════════╣"
-    echo "║  This script installs StackBill using:                       ║"
-    echo "║    - Official sb-deployment-controller Helm chart            ║"
-    echo "║    - Host-installed MySQL, MongoDB, RabbitMQ                 ║"
+    echo "║  This script installs StackBill automatically:               ║"
     echo "║    - K3s Kubernetes with Istio service mesh                  ║"
+    echo "║    - MySQL, MongoDB, RabbitMQ on host                        ║"
+    echo "║    - StackBill from AWS ECR (no UI wizard needed)            ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
-# Generate password
 generate_password() {
     openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16
 }
 
-# Parse arguments
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -90,7 +80,7 @@ parse_args() {
             --skip-infra) SKIP_INFRA=true; shift ;;
             --skip-db) SKIP_DB=true; shift ;;
             -h|--help) show_help; exit 0 ;;
-            *) log_error "Unknown: $1"; exit 1 ;;
+            *) log_error "Unknown option: $1"; exit 1 ;;
         esac
     done
     return 0
@@ -100,14 +90,15 @@ show_help() {
     echo "Usage: $0 --domain DOMAIN --ssl-cert CERT --ssl-key KEY [OPTIONS]"
     echo ""
     echo "Required:"
-    echo "  --domain      Domain name for StackBill"
-    echo "  --ssl-cert    Path to SSL certificate file"
-    echo "  --ssl-key     Path to SSL private key file"
+    echo "  --domain      Domain name for StackBill (e.g., stackbill.example.com)"
+    echo "  --ssl-cert    Path to SSL certificate file (fullchain.pem)"
+    echo "  --ssl-key     Path to SSL private key file (privatekey.pem)"
     echo ""
     echo "Optional:"
     echo "  --email       Email for notifications (default: admin@stackbill.local)"
-    echo "  --skip-infra  Skip K3s/Istio installation"
-    echo "  --skip-db     Skip database installation"
+    echo "  --skip-infra  Skip K3s/Istio installation (use existing cluster)"
+    echo "  --skip-db     Skip database installation (use existing databases)"
+    echo "  -h, --help    Show this help message"
 }
 
 validate_inputs() {
@@ -119,32 +110,17 @@ validate_inputs() {
     fi
     log_info "  Domain: $DOMAIN"
 
-    if [[ -z "$SSL_CERT" ]]; then
-        log_error "SSL certificate path required (--ssl-cert)"
-        exit 1
-    fi
-    if [[ ! -f "$SSL_CERT" ]]; then
+    if [[ -z "$SSL_CERT" || ! -f "$SSL_CERT" ]]; then
         log_error "SSL certificate file not found: $SSL_CERT"
         exit 1
     fi
     log_info "  SSL Cert: $SSL_CERT"
 
-    if [[ -z "$SSL_KEY" ]]; then
-        log_error "SSL key path required (--ssl-key)"
-        exit 1
-    fi
-    if [[ ! -f "$SSL_KEY" ]]; then
+    if [[ -z "$SSL_KEY" || ! -f "$SSL_KEY" ]]; then
         log_error "SSL key file not found: $SSL_KEY"
         exit 1
     fi
     log_info "  SSL Key: $SSL_KEY"
-
-    if [[ ! -d "$CONTROLLER_CHART" ]]; then
-        log_error "Controller chart not found at: $CONTROLLER_CHART"
-        log_error "Make sure you're running from the stackbill-poc directory"
-        exit 1
-    fi
-    log_info "  Chart: $CONTROLLER_CHART"
 
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root (use sudo)"
@@ -185,7 +161,7 @@ install_k3s() {
     export KUBECONFIG=~/.kube/config
 
     kubectl wait --for=condition=ready node --all --timeout=120s
-    log_info "K3s installed"
+    log_info "K3s installed successfully"
 }
 
 install_helm() {
@@ -197,11 +173,11 @@ install_helm() {
     fi
 
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-    log_info "Helm installed"
+    log_info "Helm installed successfully"
 }
 
 install_istio() {
-    log_step "Installing Istio"
+    log_step "Installing Istio Service Mesh"
 
     if kubectl get namespace istio-system &>/dev/null 2>&1; then
         if kubectl get pods -n istio-system -l app=istiod --no-headers 2>/dev/null | grep -q Running; then
@@ -220,7 +196,7 @@ install_istio() {
 
     istioctl install --set profile=demo -y
     kubectl wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
-    log_info "Istio installed"
+    log_info "Istio installed successfully"
 }
 
 # ============================================
@@ -244,15 +220,14 @@ install_mysql() {
     systemctl start mysql
     systemctl enable mysql
 
-    # Wait for MySQL
     for i in {1..30}; do
         mysqladmin ping -h localhost --silent 2>/dev/null && break
         sleep 2
     done
 
-    # Configure
     mysql -u root <<EOF
 CREATE DATABASE IF NOT EXISTS stackbill;
+CREATE DATABASE IF NOT EXISTS apache_cloudstack;
 CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
 CREATE USER IF NOT EXISTS 'stackbill'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION;
@@ -260,7 +235,6 @@ GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOF
 
-    # Allow remote connections
     sed -i 's/bind-address\s*=\s*127.0.0.1/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || true
     systemctl restart mysql
 
@@ -284,7 +258,6 @@ install_mongodb() {
     apt-get update -qq
     apt-get install -y -qq mongodb-org
 
-    # Configure for remote access (no auth first)
     cat > /etc/mongod.conf <<'EOF'
 storage:
   dbPath: /var/lib/mongodb
@@ -304,14 +277,12 @@ EOF
     systemctl start mongod
     systemctl enable mongod
 
-    # Wait for MongoDB
     for i in {1..30}; do
         mongosh --quiet --eval "db.runCommand('ping').ok" 2>/dev/null && break
         sleep 2
     done
 
-    # Create user
-    mongosh --quiet <<EOF
+    mongosh --quiet <<EOF || true
 use admin
 db.createUser({
   user: "stackbill",
@@ -323,7 +294,6 @@ db.createUser({
 })
 EOF
 
-    # Enable auth and restart
     cat >> /etc/mongod.conf <<'EOF'
 security:
   authorization: enabled
@@ -352,7 +322,6 @@ install_rabbitmq() {
     systemctl start rabbitmq-server
     systemctl enable rabbitmq-server
 
-    # Wait for RabbitMQ
     for i in {1..30}; do
         rabbitmqctl status &>/dev/null && break
         sleep 2
@@ -365,13 +334,13 @@ install_rabbitmq() {
     rabbitmqctl set_permissions -p / stackbill ".*" ".*" ".*"
     rabbitmqctl delete_user guest 2>/dev/null || true
 
-    log_info "RabbitMQ installed - User: stackbill, Management: http://$SERVER_IP:15672"
+    log_info "RabbitMQ installed - User: stackbill"
 }
 
 setup_nfs() {
     log_step "Setting up NFS Storage"
 
-    apt-get install -y -qq nfs-kernel-server
+    apt-get install -y -qq nfs-kernel-server nfs-common
     mkdir -p /data/stackbill
     chmod 777 /data/stackbill
 
@@ -385,131 +354,128 @@ setup_nfs() {
 }
 
 # ============================================
-# DEPLOY CONTROLLER
+# DEPLOY STACKBILL DIRECTLY FROM ECR
 # ============================================
 
-deploy_controller() {
-    log_step "Deploying sb-deployment-controller"
+setup_namespace() {
+    log_step "Setting up Kubernetes Namespace"
 
-    # Create namespace with Helm ownership labels
-    if ! kubectl get namespace $NAMESPACE &>/dev/null; then
-        kubectl create namespace $NAMESPACE
+    if ! kubectl get namespace $STACKBILL_NAMESPACE &>/dev/null; then
+        kubectl create namespace $STACKBILL_NAMESPACE
     fi
+    kubectl label namespace $STACKBILL_NAMESPACE istio-injection=enabled --overwrite
 
-    # Add Helm ownership labels (required for Helm to manage the namespace)
-    kubectl label namespace $NAMESPACE istio-injection=enabled --overwrite
-    kubectl label namespace $NAMESPACE app.kubernetes.io/managed-by=Helm --overwrite
-    kubectl annotate namespace $NAMESPACE meta.helm.sh/release-name=sb-deployment-controller --overwrite
-    kubectl annotate namespace $NAMESPACE meta.helm.sh/release-namespace=$NAMESPACE --overwrite
+    log_info "Namespace $STACKBILL_NAMESPACE ready"
+}
 
-    # Create sb-apps namespace for StackBill pods
-    if ! kubectl get namespace sb-apps &>/dev/null; then
-        kubectl create namespace sb-apps
-    fi
-    kubectl label namespace sb-apps istio-injection=enabled --overwrite
+setup_tls_secret() {
+    log_step "Setting up TLS Secret"
 
-    # Deploy official controller chart
-    log_info "Deploying from: $CONTROLLER_CHART"
+    kubectl create secret tls istio-ingressgateway-certs \
+        --cert="$SSL_CERT" \
+        --key="$SSL_KEY" \
+        -n istio-system \
+        --dry-run=client -o yaml | kubectl apply -f -
 
-    cd "$CONTROLLER_CHART"
-    helm dependency update . 2>/dev/null || helm dependency build . 2>/dev/null || true
+    log_info "TLS secret created in istio-system"
+}
 
-    helm upgrade --install sb-deployment-controller . \
-        --namespace $NAMESPACE \
-        --timeout 300s \
+deploy_stackbill() {
+    log_step "Deploying StackBill from ECR"
+
+    log_info "Pulling chart from: $STACKBILL_CHART"
+
+    # Install StackBill directly from ECR
+    helm upgrade --install stackbill "$STACKBILL_CHART" \
+        --namespace $STACKBILL_NAMESPACE \
+        --set global.domain="$DOMAIN" \
+        --set global.nfs.server="$SERVER_IP" \
+        --set global.nfs.path="/data/stackbill" \
+        --set global.mysql.ip="$SERVER_IP" \
+        --set global.mysql.username="stackbill" \
+        --set global.mysql.password="$MYSQL_PASSWORD" \
+        --set global.mongo.ip="$SERVER_IP" \
+        --set global.mongo.username="stackbill" \
+        --set global.mongo.password="$MONGODB_PASSWORD" \
+        --set global.rabbitmq.ip="$SERVER_IP" \
+        --set global.rabbitmq.username="stackbill" \
+        --set global.rabbitmq.password="$RABBITMQ_PASSWORD" \
+        --timeout 600s \
         --wait
 
-    log_info "Controller deployed"
-
-    # Wait for pod
-    log_info "Waiting for controller pod..."
-    kubectl wait --for=condition=ready pod -l app=sb-deployment-controller -n $NAMESPACE --timeout=180s
-
-    kubectl get pods -n $NAMESPACE
+    log_info "StackBill deployed successfully!"
 }
 
-setup_ingress() {
-    log_step "Setting up Ingress Access"
+setup_istio_gateway() {
+    log_step "Setting up Istio Gateway"
 
-    # Patch Istio ingress gateway to NodePort
+    # Create Gateway for HTTPS
+    kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: stackbill-gateway
+  namespace: $STACKBILL_NAMESPACE
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: istio-ingressgateway-certs
+    hosts:
+    - "$DOMAIN"
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    tls:
+      httpsRedirect: true
+    hosts:
+    - "$DOMAIN"
+EOF
+
+    # Patch Istio ingress gateway to use NodePort
     kubectl patch svc istio-ingressgateway -n istio-system --type='json' -p='[
         {"op": "replace", "path": "/spec/type", "value": "NodePort"},
-        {"op": "add", "path": "/spec/ports/0/nodePort", "value": 31080},
-        {"op": "add", "path": "/spec/ports/1/nodePort", "value": 31443}
-    ]' 2>/dev/null || log_warn "Could not patch ingress gateway"
+        {"op": "replace", "path": "/spec/ports/0/nodePort", "value": 31080},
+        {"op": "replace", "path": "/spec/ports/1/nodePort", "value": 31443}
+    ]' 2>/dev/null || log_warn "Could not patch ingress gateway ports"
 
-    log_info "Access controller at: http://$SERVER_IP:31080"
+    log_info "Istio Gateway configured"
 }
 
-# ============================================
-# AUTO-CONFIGURE VIA API
-# ============================================
+wait_for_pods() {
+    log_step "Waiting for StackBill Pods"
 
-try_auto_configure() {
-    log_step "Attempting Auto-Configuration via API"
+    log_info "Waiting for pods to be ready (this may take several minutes)..."
 
-    local POD_NAME=$(kubectl get pods -n $NAMESPACE -l app=sb-deployment-controller -o jsonpath='{.items[0].metadata.name}')
-    log_info "Controller pod: $POD_NAME"
+    # Wait up to 10 minutes for pods
+    local timeout=600
+    local elapsed=0
+    local interval=10
 
-    # Discover what's inside the container
-    log_info "Inspecting controller container..."
-    kubectl exec -n $NAMESPACE "$POD_NAME" -- ls -la /app/ 2>/dev/null | head -10 || true
-    kubectl exec -n $NAMESPACE "$POD_NAME" -- cat /app/package.json 2>/dev/null | head -20 || true
+    while [[ $elapsed -lt $timeout ]]; do
+        local ready=$(kubectl get pods -n $STACKBILL_NAMESPACE --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+        local total=$(kubectl get pods -n $STACKBILL_NAMESPACE --no-headers 2>/dev/null | wc -l || echo "0")
 
-    # Port-forward
-    log_info "Setting up port-forward..."
-    kubectl port-forward "pod/$POD_NAME" 8888:3000 -n $NAMESPACE &
-    local PF_PID=$!
-    sleep 5
+        log_info "  Pods ready: $ready / $total"
 
-    # Probe endpoints
-    log_info "Probing API endpoints..."
-    for endpoint in "/" "/api" "/health" "/api/health" "/api/status"; do
-        local code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8888$endpoint" 2>/dev/null || echo "000")
-        [[ "$code" != "000" ]] && log_info "  $endpoint -> HTTP $code"
-    done
-
-    # Try to find API routes by checking common patterns
-    log_info "Trying POST endpoints..."
-
-    local PAYLOAD=$(cat <<EOF
-{
-    "mysql": {"host": "$SERVER_IP", "port": 3306, "database": "stackbill", "username": "stackbill", "password": "$MYSQL_PASSWORD"},
-    "mongodb": {"host": "$SERVER_IP", "port": 27017, "database": "stackbill_usage", "username": "stackbill", "password": "$MONGODB_PASSWORD"},
-    "rabbitmq": {"host": "$SERVER_IP", "port": 5672, "username": "stackbill", "password": "$RABBITMQ_PASSWORD"},
-    "nfs": {"server": "$SERVER_IP", "path": "/data/stackbill"},
-    "domain": "$DOMAIN",
-    "email": "$EMAIL",
-    "ssl": {"certificate": "$(base64 -w0 < "$SSL_CERT")", "privateKey": "$(base64 -w0 < "$SSL_KEY")"}
-}
-EOF
-)
-
-    local CONFIG_SUCCESS=false
-    for endpoint in "/api/configure" "/api/setup" "/api/deploy" "/api/install" "/configure" "/setup" "/deploy"; do
-        local response=$(curl -s -w "\n%{http_code}" -X POST "http://localhost:8888$endpoint" \
-            -H "Content-Type: application/json" -d "$PAYLOAD" 2>/dev/null || echo -e "\n000")
-        local code=$(echo "$response" | tail -n1)
-
-        if [[ "$code" == "200" || "$code" == "201" || "$code" == "202" ]]; then
-            log_info "SUCCESS via $endpoint (HTTP $code)"
-            CONFIG_SUCCESS=true
+        if [[ $total -gt 0 && $ready -eq $total ]]; then
+            log_info "All pods are running!"
             break
-        elif [[ "$code" != "404" && "$code" != "000" ]]; then
-            log_info "  $endpoint -> HTTP $code"
         fi
+
+        sleep $interval
+        elapsed=$((elapsed + interval))
     done
 
-    kill $PF_PID 2>/dev/null || true
-
-    if [[ "$CONFIG_SUCCESS" == "true" ]]; then
-        log_info "Auto-configuration successful!"
-        sleep 30
-        kubectl get pods -n sb-apps 2>/dev/null || true
-    else
-        log_warn "Auto-configuration via API not available"
-        log_info "Please use the UI to complete configuration"
-    fi
+    echo ""
+    kubectl get pods -n $STACKBILL_NAMESPACE
 }
 
 # ============================================
@@ -525,7 +491,9 @@ STACKBILL POC CREDENTIALS
 Generated: $(date)
 ================================================================================
 
-DOMAIN: https://$DOMAIN
+PORTAL URL: https://$DOMAIN
+
+SERVER IP: $SERVER_IP
 
 MYSQL:
   Host: $SERVER_IP
@@ -537,7 +505,7 @@ MYSQL:
 MONGODB:
   Host: $SERVER_IP
   Port: 27017
-  Database: stackbill_usage
+  Database: admin
   Username: stackbill
   Password: $MONGODB_PASSWORD
 
@@ -561,44 +529,28 @@ EOF
 print_summary() {
     echo ""
     echo -e "${GREEN}════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}                    INSTALLATION COMPLETE                        ${NC}"
+    echo -e "${GREEN}              STACKBILL INSTALLATION COMPLETE!                  ${NC}"
     echo -e "${GREEN}════════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "${CYAN}ACCESS THE CONTROLLER UI:${NC}"
-    echo "  http://$SERVER_IP:31080"
+    echo -e "${CYAN}ACCESS STACKBILL:${NC}"
+    echo "  Portal: https://$DOMAIN"
+    echo "  (Make sure DNS points $DOMAIN to $SERVER_IP)"
     echo ""
-    echo -e "${CYAN}ENTER THESE CREDENTIALS IN THE UI:${NC}"
+    echo -e "${CYAN}DIRECT ACCESS (if DNS not configured):${NC}"
+    echo "  HTTP:  http://$SERVER_IP:31080"
+    echo "  HTTPS: https://$SERVER_IP:31443"
     echo ""
-    echo "  MySQL:"
-    echo "    Server IP: $SERVER_IP"
-    echo "    Username:  stackbill"
-    echo "    Password:  $MYSQL_PASSWORD"
-    echo ""
-    echo "  MongoDB:"
-    echo "    Server IP: $SERVER_IP"
-    echo "    Username:  stackbill"
-    echo "    Password:  $MONGODB_PASSWORD"
-    echo ""
-    echo "  RabbitMQ:"
-    echo "    Server IP: $SERVER_IP"
-    echo "    Username:  stackbill"
-    echo "    Password:  $RABBITMQ_PASSWORD"
-    echo ""
-    echo "  NFS Storage:"
-    echo "    Server:    $SERVER_IP"
-    echo "    Path:      /data/stackbill"
-    echo ""
-    echo "  Domain:      $DOMAIN"
-    echo "  SSL Cert:    $SSL_CERT"
-    echo "  SSL Key:     $SSL_KEY"
-    echo "  Email:       $EMAIL"
+    echo -e "${CYAN}SERVICE CREDENTIALS:${NC}"
+    echo "  MySQL:    stackbill / $MYSQL_PASSWORD"
+    echo "  MongoDB:  stackbill / $MONGODB_PASSWORD"
+    echo "  RabbitMQ: stackbill / $RABBITMQ_PASSWORD"
     echo ""
     echo -e "${YELLOW}Credentials saved to: $HOME/stackbill-credentials.txt${NC}"
     echo ""
-    echo "Useful commands:"
-    echo "  kubectl get pods -n $NAMESPACE"
-    echo "  kubectl get pods -n sb-apps"
-    echo "  kubectl logs -f -l app=sb-deployment-controller -n $NAMESPACE"
+    echo -e "${CYAN}USEFUL COMMANDS:${NC}"
+    echo "  kubectl get pods -n $STACKBILL_NAMESPACE"
+    echo "  kubectl logs -f <pod-name> -n $STACKBILL_NAMESPACE"
+    echo "  cat $HOME/stackbill-credentials.txt"
     echo ""
 }
 
@@ -608,14 +560,10 @@ print_summary() {
 
 main() {
     print_banner
-    log_info "Starting installation..."
+    log_info "Starting fully automated installation..."
 
-    log_info "Parsing arguments..."
     parse_args "$@"
-    log_info "Arguments parsed: DOMAIN=$DOMAIN"
-
     validate_inputs
-
     get_server_ip
 
     # Generate passwords
@@ -631,7 +579,7 @@ main() {
         install_istio
     fi
 
-    # Databases
+    # Databases on host
     if [[ "$SKIP_DB" != "true" ]]; then
         install_mysql
         install_mongodb
@@ -639,12 +587,12 @@ main() {
         setup_nfs
     fi
 
-    # Deploy controller
-    deploy_controller
-    setup_ingress
-
-    # Try auto-configure
-    try_auto_configure
+    # Deploy StackBill directly
+    setup_namespace
+    setup_tls_secret
+    deploy_stackbill
+    setup_istio_gateway
+    wait_for_pods
 
     # Save and summarize
     save_credentials
