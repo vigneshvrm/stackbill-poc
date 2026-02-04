@@ -384,6 +384,13 @@ install_aws_cli() {
         return 0
     fi
 
+    # Install unzip if not present
+    if ! command -v unzip &>/dev/null; then
+        log_info "Installing unzip..."
+        apt-get update -qq
+        apt-get install -y -qq unzip
+    fi
+
     log_info "Downloading AWS CLI..."
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
 
