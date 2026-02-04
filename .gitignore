@@ -1,0 +1,22 @@
+# Claude settings (local only)
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Helm packages
+*.tgz
+
+# Credentials (never commit)
+*credentials*.txt
+*.pem
+*.key
