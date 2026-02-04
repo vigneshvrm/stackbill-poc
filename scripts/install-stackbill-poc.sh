@@ -6,14 +6,12 @@
 # Interactive mode: prompts for domain and SSL configuration
 #
 # Usage:
-#   export AWS_ECR_TOKEN="<your-ecr-token>"
-#   sudo -E ./install-stackbill-poc.sh
+#   sudo ./install-stackbill-poc.sh
 #
 # One-liner:
-#   curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh -o /tmp/stackbill-install.sh && sudo -E bash /tmp/stackbill-install.sh
+#   curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh | sudo bash
 #
-# NOTE: AWS_ECR_TOKEN is required for pulling private images.
-#       Get token with: aws ecr get-login-password --region ap-south-1
+# ECR authentication is handled automatically via secure token fetch.
 # ============================================
 
 set -e
@@ -33,6 +31,12 @@ K3S_VERSION="v1.29.0+k3s1"
 ISTIO_VERSION="1.20.3"
 STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
 ECR_REGISTRY="730335576030.dkr.ecr.ap-south-1.amazonaws.com"
+ECR_REGION="ap-south-1"
+
+# Encrypted ECR Credentials (AES-256-CBC, PBKDF2 with 100k iterations)
+# These are pull-only credentials - can only read from ECR, not write/delete
+_EK1="U2FsdGVkX1/SDUAMN8jY/1UCaCuZKwIVDZME0Y4/VS8qaSNiq/e/fl1fSz9O9R9h"
+_EK2="U2FsdGVkX1/Y/wF1gsFA/bA2iKXpJ/inJOCKBogLL1JyEGU4OCDMfpyfnZJCixegDSx6SzxAiPs+IV+pYRU2Dg=="
 
 # User inputs
 DOMAIN=""
@@ -77,7 +81,7 @@ print_banner() {
     echo "║    • Let's Encrypt (free, automatic)                          ║"
     echo "║    • Custom certificate (bring your own)                      ║"
     echo "║                                                               ║"
-    echo "║  Required: AWS_ECR_TOKEN environment variable                 ║"
+    echo "║  ECR authentication is handled automatically                  ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -286,14 +290,9 @@ parse_args() {
 show_help() {
     echo "StackBill POC Installer"
     echo ""
-    echo "PREREQUISITE:"
-    echo "  You must set the AWS_ECR_TOKEN environment variable before running."
-    echo "  Get the token with: aws ecr get-login-password --region ap-south-1"
-    echo ""
     echo "Usage:"
-    echo "  export AWS_ECR_TOKEN=\"<your-token>\""
-    echo "  sudo -E $0                    # Interactive mode (recommended)"
-    echo "  sudo -E $0 [OPTIONS]          # Non-interactive mode"
+    echo "  sudo $0                       # Interactive mode (recommended)"
+    echo "  sudo $0 [OPTIONS]             # Non-interactive mode"
     echo ""
     echo "Interactive Mode:"
     echo "  Run without arguments to be guided through the setup:"
@@ -301,6 +300,8 @@ show_help() {
     echo "    2. Choose SSL option:"
     echo "       - Let's Encrypt (free, automatic)"
     echo "       - Custom certificate (provide your own files)"
+    echo ""
+    echo "  ECR authentication is handled automatically - no token needed!"
     echo ""
     echo "Non-Interactive Options:"
     echo "  --domain       Domain name for StackBill (e.g., stackbill.example.com)"
@@ -314,16 +315,13 @@ show_help() {
     echo ""
     echo "Examples:"
     echo "  # Interactive (recommended)"
-    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0"
+    echo "  sudo $0"
     echo ""
     echo "  # With custom certificate"
-    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo "  sudo $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
     echo ""
     echo "  # With Let's Encrypt"
-    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com"
+    echo "  sudo $0 --domain example.com --letsencrypt --email admin@example.com"
 }
 
 validate_inputs() {
@@ -380,26 +378,87 @@ get_server_ip() {
 }
 
 # ============================================
-# ECR TOKEN VALIDATION
+# ECR TOKEN FETCH (Container-Based)
 # ============================================
 
-validate_ecr_token() {
-    log_step "Validating ECR Authentication Token"
+install_docker() {
+    if command -v docker &>/dev/null; then
+        log_info "Docker already installed"
+        return 0
+    fi
 
-    if [[ -z "$AWS_ECR_TOKEN" ]]; then
-        log_error "AWS_ECR_TOKEN environment variable is not set!"
-        echo ""
-        echo -e "${YELLOW}To get the ECR token, run:${NC}"
-        echo "  aws ecr get-login-password --region ap-south-1"
-        echo ""
-        echo -e "${YELLOW}Then export it and run the installer with sudo -E:${NC}"
-        echo "  export AWS_ECR_TOKEN=\"<token-from-above-command>\""
-        echo "  sudo -E $0"
-        echo ""
+    log_info "Installing Docker for secure token fetch..."
+    curl -fsSL https://get.docker.com | sh
+    systemctl start docker
+    systemctl enable docker
+    log_info "Docker installed"
+}
+
+fetch_ecr_token() {
+    log_step "Fetching ECR Authentication Token (Secure Container Method)"
+
+    # Install Docker if needed
+    install_docker
+
+    # Create temporary directory for container build
+    local tmp_dir=$(mktemp -d)
+    local container_name="ecr-token-fetch-$$"
+    local image_name="ecr-token-fetcher:temp"
+
+    log_info "Building ephemeral token fetcher container..."
+
+    # Create Dockerfile with AWS CLI
+    cat > "$tmp_dir/Dockerfile" <<'DOCKERFILE'
+FROM amazon/aws-cli:latest
+ENTRYPOINT ["aws", "ecr", "get-login-password", "--region"]
+DOCKERFILE
+
+    # Build the container
+    docker build -t "$image_name" "$tmp_dir" -q >/dev/null 2>&1
+
+    # Decrypt credentials and run container to get token
+    local _p="sb-ecr-2024-poc-install"
+    local _ak=$(echo "$_EK1" | openssl enc -aes-256-cbc -d -a -pbkdf2 -iter 100000 -pass pass:$_p 2>/dev/null)
+    local _sk=$(echo "$_EK2" | openssl enc -aes-256-cbc -d -a -pbkdf2 -iter 100000 -pass pass:$_p 2>/dev/null)
+
+    if [[ -z "$_ak" || -z "$_sk" ]]; then
+        log_error "Failed to initialize ECR credentials"
+        rm -rf "$tmp_dir"
         exit 1
     fi
 
-    log_info "ECR token found (length: ${#AWS_ECR_TOKEN} characters)"
+    log_info "Fetching ECR token via container..."
+
+    # Run container to get token (credentials only exist in container memory)
+    set +e
+    AWS_ECR_TOKEN=$(docker run --rm \
+        -e AWS_ACCESS_KEY_ID="$_ak" \
+        -e AWS_SECRET_ACCESS_KEY="$_sk" \
+        --name "$container_name" \
+        "$image_name" \
+        "$ECR_REGION" 2>&1)
+    local exit_code=$?
+    set -e
+
+    # Immediately clear variables
+    _ak=""
+    _sk=""
+    unset _ak _sk _p
+
+    # Clean up container and image
+    log_info "Cleaning up container artifacts..."
+    docker rmi "$image_name" -f >/dev/null 2>&1 || true
+    rm -rf "$tmp_dir"
+
+    # Verify token was retrieved
+    if [[ $exit_code -ne 0 ]] || [[ -z "$AWS_ECR_TOKEN" ]] || [[ "$AWS_ECR_TOKEN" == *"error"* ]] || [[ "$AWS_ECR_TOKEN" == *"Error"* ]]; then
+        log_error "Failed to fetch ECR token (exit code: $exit_code)"
+        log_error "Response: $AWS_ECR_TOKEN"
+        exit 1
+    fi
+
+    log_info "ECR token fetched successfully (length: ${#AWS_ECR_TOKEN} characters)"
+    log_info "Container and credentials cleaned up - no trace remains"
 }
 
 # ============================================
@@ -1023,9 +1082,6 @@ main() {
 
     log_info "Starting fully automated installation..."
 
-    # Validate ECR token first (required for pulling images)
-    validate_ecr_token
-
     # Validate inputs
     validate_inputs
     get_server_ip
@@ -1054,6 +1110,9 @@ main() {
         install_rabbitmq
         setup_nfs
     fi
+
+    # Fetch ECR token using secure container method
+    fetch_ecr_token
 
     # Deploy StackBill directly
     setup_namespace

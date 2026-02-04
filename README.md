@@ -11,6 +11,8 @@ This installer provides a **completely automated POC installation**:
 
 **No UI wizard required** - everything is configured automatically.
 
+**ECR authentication is handled automatically** - no manual token required!
+
 ## Requirements
 
 | Component | Requirement |
@@ -23,33 +25,19 @@ This installer provides a **completely automated POC installation**:
 
 ## Quick Start
 
-### Step 1: Get ECR Token
-
-First, get the AWS ECR authentication token (requires AWS CLI configured with valid credentials):
+### One-Line Install
 
 ```bash
-export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
+curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh | sudo bash
 ```
 
-### Step 2: Run Installer
-
-**One-Line Install:**
-
-```bash
-export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
-curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh -o /tmp/stackbill-install.sh && sudo -E bash /tmp/stackbill-install.sh
-```
-
-**Or Clone and Install:**
+### Or Clone and Install
 
 ```bash
 git clone https://github.com/vigneshvrm/stackbill-poc.git
 cd stackbill-poc
-export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
-sudo -E ./scripts/install-stackbill-poc.sh
+sudo ./scripts/install-stackbill-poc.sh
 ```
-
-> **Important:** Use `sudo -E` to preserve the `AWS_ECR_TOKEN` environment variable.
 
 The installer will prompt you for:
 1. **Domain name** - Your StackBill portal domain (e.g., `stackbill.example.com`)
@@ -58,6 +46,7 @@ The installer will prompt you for:
    - **Custom Certificate** - Provide your own fullchain.pem and privatekey.pem
 
 That's it! The script will install everything automatically:
+- Docker (for secure ECR token fetch)
 - K3s Kubernetes cluster
 - Istio service mesh
 - MySQL, MongoDB, RabbitMQ databases
@@ -67,6 +56,7 @@ That's it! The script will install everything automatically:
 
 | Component | Version | Location |
 |-----------|---------|----------|
+| Docker | Latest | Container runtime |
 | K3s | v1.29.0 | Kubernetes cluster |
 | Istio | 1.20.3 | Service mesh |
 | MySQL | 8.0 | Host (systemd) |
@@ -92,20 +82,17 @@ Run without arguments for interactive mode, or use these options for non-interac
 ### Examples
 
 ```bash
-# First, always get the ECR token
-export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
-
 # Interactive mode (recommended)
-sudo -E ./scripts/install-stackbill-poc.sh
+sudo ./scripts/install-stackbill-poc.sh
 
 # With Let's Encrypt SSL
-sudo -E ./scripts/install-stackbill-poc.sh \
+sudo ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --letsencrypt \
     --email admin@example.com
 
 # With custom certificate
-sudo -E ./scripts/install-stackbill-poc.sh \
+sudo ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --ssl-cert /path/to/fullchain.pem \
     --ssl-key /path/to/privatekey.pem
