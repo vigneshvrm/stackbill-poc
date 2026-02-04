@@ -127,38 +127,91 @@ delete_host_databases() {
 
     log_info "Stopping and removing host databases..."
 
-    # MySQL
-    if systemctl is-active --quiet mysql 2>/dev/null; then
-        log_info "Stopping MySQL..."
-        systemctl stop mysql
-        systemctl disable mysql
-        apt-get remove -y mysql-server mysql-client 2>/dev/null || true
-        rm -rf /var/lib/mysql
-        log_info "MySQL removed"
-    fi
+    # Fix any broken packages first
+    log_info "Fixing any broken packages..."
+    dpkg --configure -a 2>/dev/null || true
 
-    # MongoDB
-    if systemctl is-active --quiet mongod 2>/dev/null; then
-        log_info "Stopping MongoDB..."
-        systemctl stop mongod
-        systemctl disable mongod
-        apt-get remove -y mongodb-org 2>/dev/null || true
-        rm -rf /var/lib/mongodb
-        rm -f /etc/apt/sources.list.d/mongodb-org-7.0.list
-        log_info "MongoDB removed"
-    fi
+    # ==================== MySQL ====================
+    log_info "Removing MySQL..."
 
-    # RabbitMQ
-    if systemctl is-active --quiet rabbitmq-server 2>/dev/null; then
-        log_info "Stopping RabbitMQ..."
-        systemctl stop rabbitmq-server
-        systemctl disable rabbitmq-server
-        apt-get remove -y rabbitmq-server 2>/dev/null || true
-        rm -rf /var/lib/rabbitmq
-        log_info "RabbitMQ removed"
-    fi
+    # Stop MySQL if running
+    systemctl stop mysql 2>/dev/null || true
+    systemctl disable mysql 2>/dev/null || true
 
-    # NFS
+    # Remove and purge all MySQL packages
+    apt-get remove --purge -y \
+        mysql-server \
+        mysql-server-8.0 \
+        mysql-client \
+        mysql-client-8.0 \
+        mysql-common \
+        mysql-server-core-8.0 \
+        mysql-client-core-8.0 \
+        2>/dev/null || true
+
+    # Clean up MySQL directories and config
+    rm -rf /etc/mysql
+    rm -rf /var/lib/mysql
+    rm -rf /var/log/mysql
+    rm -rf /var/run/mysqld
+
+    # Clean up alternatives
+    rm -f /etc/alternatives/my.cnf
+    update-alternatives --remove-all my.cnf 2>/dev/null || true
+
+    log_info "MySQL removed"
+
+    # ==================== MongoDB ====================
+    log_info "Removing MongoDB..."
+
+    # Stop MongoDB if running
+    systemctl stop mongod 2>/dev/null || true
+    systemctl disable mongod 2>/dev/null || true
+
+    # Remove and purge all MongoDB packages
+    apt-get remove --purge -y \
+        mongodb-org \
+        mongodb-org-database \
+        mongodb-org-server \
+        mongodb-org-shell \
+        mongodb-org-mongos \
+        mongodb-org-tools \
+        mongodb-mongosh \
+        2>/dev/null || true
+
+    # Clean up MongoDB directories and config
+    rm -rf /etc/mongod.conf
+    rm -rf /var/lib/mongodb
+    rm -rf /var/log/mongodb
+    rm -rf /var/run/mongodb
+
+    # Remove MongoDB apt repository
+    rm -f /etc/apt/sources.list.d/mongodb-org-7.0.list
+    rm -f /usr/share/keyrings/mongodb-server-7.0.gpg
+
+    log_info "MongoDB removed"
+
+    # ==================== RabbitMQ ====================
+    log_info "Removing RabbitMQ..."
+
+    # Stop RabbitMQ if running
+    systemctl stop rabbitmq-server 2>/dev/null || true
+    systemctl disable rabbitmq-server 2>/dev/null || true
+
+    # Remove and purge RabbitMQ packages
+    apt-get remove --purge -y \
+        rabbitmq-server \
+        erlang* \
+        2>/dev/null || true
+
+    # Clean up RabbitMQ directories
+    rm -rf /var/lib/rabbitmq
+    rm -rf /var/log/rabbitmq
+    rm -rf /etc/rabbitmq
+
+    log_info "RabbitMQ removed"
+
+    # ==================== NFS ====================
     if [[ -d /data/stackbill ]]; then
         log_info "Removing NFS data..."
         rm -rf /data/stackbill
@@ -167,7 +220,18 @@ delete_host_databases() {
         log_info "NFS data removed"
     fi
 
-    log_info "Host databases removed"
+    # ==================== Cleanup ====================
+    log_info "Cleaning up apt cache..."
+    apt-get autoremove -y 2>/dev/null || true
+    apt-get autoclean 2>/dev/null || true
+
+    # Remove credentials file
+    if [[ -f "$HOME/stackbill-credentials.txt" ]]; then
+        log_info "Removing credentials file..."
+        rm -f "$HOME/stackbill-credentials.txt"
+    fi
+
+    log_info "Host databases removed completely"
 }
 
 show_remaining() {
