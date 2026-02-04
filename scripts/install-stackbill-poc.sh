@@ -33,8 +33,8 @@ ECR_REGISTRY="730335576030.dkr.ecr.ap-south-1.amazonaws.com"
 # AWS ECR Credentials (Pull-Only IAM User)
 # This IAM user has ONLY AmazonEC2ContainerRegistryPullOnly policy
 # It can ONLY pull images - no push/delete/modify permissions
-ECR_AWS_ACCESS_KEY="AKIA2UC3EP7PNXBH5GNP"
-ECR_AWS_SECRET_KEY="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"
+ECR_AWS_ACCESS_KEY="AKIA2UC3EP7PJVP44XHP"
+ECR_AWS_SECRET_KEY="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"
 ECR_REGION="ap-south-1"
 
 # User inputs
