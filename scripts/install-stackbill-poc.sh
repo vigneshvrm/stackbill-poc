@@ -6,10 +6,14 @@
 # Interactive mode: prompts for domain and SSL configuration
 #
 # Usage:
-#   sudo ./install-stackbill-poc.sh
-#   sudo ./install-stackbill-poc.sh --domain DOMAIN --ssl-cert CERT --ssl-key KEY
+#   export AWS_ECR_TOKEN="<your-ecr-token>"
+#   sudo -E ./install-stackbill-poc.sh
 #
-# ECR authentication is handled automatically using embedded credentials.
+# One-liner:
+#   curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh -o /tmp/stackbill-install.sh && sudo -E bash /tmp/stackbill-install.sh
+#
+# NOTE: AWS_ECR_TOKEN is required for pulling private images.
+#       Get token with: aws ecr get-login-password --region ap-south-1
 # ============================================
 
 set -e
@@ -29,13 +33,6 @@ K3S_VERSION="v1.29.0+k3s1"
 ISTIO_VERSION="1.20.3"
 STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
 ECR_REGISTRY="730335576030.dkr.ecr.ap-south-1.amazonaws.com"
-
-# AWS ECR Credentials (Pull-Only IAM User)
-# This IAM user has ONLY AmazonEC2ContainerRegistryPullOnly policy
-# It can ONLY pull images - no push/delete/modify permissions
-ECR_AWS_ACCESS_KEY="AKIA2UC3EP7PJVP44XHP"
-ECR_AWS_SECRET_KEY="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"
-ECR_REGION="ap-south-1"
 
 # User inputs
 DOMAIN=""
@@ -79,6 +76,8 @@ print_banner() {
     echo "║  SSL Options:                                                 ║"
     echo "║    • Let's Encrypt (free, automatic)                          ║"
     echo "║    • Custom certificate (bring your own)                      ║"
+    echo "║                                                               ║"
+    echo "║  Required: AWS_ECR_TOKEN environment variable                 ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -287,9 +286,14 @@ parse_args() {
 show_help() {
     echo "StackBill POC Installer"
     echo ""
+    echo "PREREQUISITE:"
+    echo "  You must set the AWS_ECR_TOKEN environment variable before running."
+    echo "  Get the token with: aws ecr get-login-password --region ap-south-1"
+    echo ""
     echo "Usage:"
-    echo "  sudo $0                    # Interactive mode (recommended)"
-    echo "  sudo $0 [OPTIONS]          # Non-interactive mode"
+    echo "  export AWS_ECR_TOKEN=\"<your-token>\""
+    echo "  sudo -E $0                    # Interactive mode (recommended)"
+    echo "  sudo -E $0 [OPTIONS]          # Non-interactive mode"
     echo ""
     echo "Interactive Mode:"
     echo "  Run without arguments to be guided through the setup:"
@@ -310,13 +314,16 @@ show_help() {
     echo ""
     echo "Examples:"
     echo "  # Interactive (recommended)"
-    echo "  sudo $0"
+    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
+    echo "  sudo -E $0"
     echo ""
     echo "  # With custom certificate"
-    echo "  sudo $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
+    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
     echo ""
     echo "  # With Let's Encrypt"
-    echo "  sudo $0 --domain example.com --letsencrypt --email admin@example.com"
+    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
+    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com"
 }
 
 validate_inputs() {
@@ -373,75 +380,26 @@ get_server_ip() {
 }
 
 # ============================================
-# AWS CLI & TOKEN FETCHING
+# ECR TOKEN VALIDATION
 # ============================================
 
-install_aws_cli() {
-    log_step "Installing AWS CLI"
-
-    if command -v aws &>/dev/null; then
-        log_info "AWS CLI already installed: $(aws --version)"
-        return 0
-    fi
-
-    # Install unzip if not present
-    if ! command -v unzip &>/dev/null; then
-        log_info "Installing unzip..."
-        apt-get update -qq
-        apt-get install -y -qq unzip
-    fi
-
-    log_info "Downloading AWS CLI..."
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-
-    log_info "Installing AWS CLI..."
-    unzip -q /tmp/awscliv2.zip -d /tmp
-    /tmp/aws/install --update
-
-    # Cleanup
-    rm -rf /tmp/aws /tmp/awscliv2.zip
-
-    log_info "AWS CLI installed: $(aws --version)"
-}
-
-fetch_ecr_token() {
-    log_step "Fetching ECR Authentication Token"
-
-    # Set credentials temporarily for AWS CLI
-    export AWS_ACCESS_KEY_ID="$ECR_AWS_ACCESS_KEY"
-    export AWS_SECRET_ACCESS_KEY="$ECR_AWS_SECRET_KEY"
-    export AWS_DEFAULT_REGION="$ECR_REGION"
-
-    log_info "Authenticating with AWS ECR..."
-
-    # Fetch ECR token using AWS CLI (capture both output and errors)
-    local ecr_output
-    local ecr_exit_code
-
-    # Temporarily disable set -e for this command
-    set +e
-    ecr_output=$(aws ecr get-login-password --region "$ECR_REGION" 2>&1)
-    ecr_exit_code=$?
-    set -e
-
-    if [[ $ecr_exit_code -ne 0 ]]; then
-        log_error "Failed to fetch ECR token from AWS (exit code: $ecr_exit_code)"
-        log_error "AWS Error: $ecr_output"
-        log_error "Please check the AWS credentials in the script"
-        exit 1
-    fi
-
-    AWS_ECR_TOKEN="$ecr_output"
+validate_ecr_token() {
+    log_step "Validating ECR Authentication Token"
 
     if [[ -z "$AWS_ECR_TOKEN" ]]; then
-        log_error "ECR token is empty"
+        log_error "AWS_ECR_TOKEN environment variable is not set!"
+        echo ""
+        echo -e "${YELLOW}To get the ECR token, run:${NC}"
+        echo "  aws ecr get-login-password --region ap-south-1"
+        echo ""
+        echo -e "${YELLOW}Then export it and run the installer with sudo -E:${NC}"
+        echo "  export AWS_ECR_TOKEN=\"<token-from-above-command>\""
+        echo "  sudo -E $0"
+        echo ""
         exit 1
     fi
 
-    log_info "ECR authentication token fetched successfully"
-
-    # Clear credentials from environment (token is now stored in AWS_ECR_TOKEN)
-    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION
+    log_info "ECR token found (length: ${#AWS_ECR_TOKEN} characters)"
 }
 
 # ============================================
@@ -1065,16 +1023,15 @@ main() {
 
     log_info "Starting fully automated installation..."
 
+    # Validate ECR token first (required for pulling images)
+    validate_ecr_token
+
     # Validate inputs
     validate_inputs
     get_server_ip
 
     # Load existing or generate new passwords
     load_or_generate_passwords
-
-    # Install AWS CLI and fetch ECR token automatically
-    install_aws_cli
-    fetch_ecr_token
 
     # Infrastructure
     if [[ "$SKIP_INFRA" != "true" ]]; then

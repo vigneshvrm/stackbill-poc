@@ -23,19 +23,33 @@ This installer provides a **completely automated POC installation**:
 
 ## Quick Start
 
-### One-Line Install
+### Step 1: Get ECR Token
+
+First, get the AWS ECR authentication token (requires AWS CLI configured with valid credentials):
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh -o /tmp/stackbill-install.sh && sudo bash /tmp/stackbill-install.sh
+export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
 ```
 
-### Or Clone and Install
+### Step 2: Run Installer
+
+**One-Line Install:**
+
+```bash
+export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
+curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh -o /tmp/stackbill-install.sh && sudo -E bash /tmp/stackbill-install.sh
+```
+
+**Or Clone and Install:**
 
 ```bash
 git clone https://github.com/vigneshvrm/stackbill-poc.git
 cd stackbill-poc
-sudo ./scripts/install-stackbill-poc.sh
+export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
+sudo -E ./scripts/install-stackbill-poc.sh
 ```
+
+> **Important:** Use `sudo -E` to preserve the `AWS_ECR_TOKEN` environment variable.
 
 The installer will prompt you for:
 1. **Domain name** - Your StackBill portal domain (e.g., `stackbill.example.com`)
@@ -48,8 +62,6 @@ That's it! The script will install everything automatically:
 - Istio service mesh
 - MySQL, MongoDB, RabbitMQ databases
 - StackBill application
-
-**Note:** All authentication (AWS ECR, databases) is handled automatically!
 
 ## What Gets Installed
 
@@ -80,17 +92,20 @@ Run without arguments for interactive mode, or use these options for non-interac
 ### Examples
 
 ```bash
+# First, always get the ECR token
+export AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
+
 # Interactive mode (recommended)
-sudo ./scripts/install-stackbill-poc.sh
+sudo -E ./scripts/install-stackbill-poc.sh
 
 # With Let's Encrypt SSL
-sudo ./scripts/install-stackbill-poc.sh \
+sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --letsencrypt \
     --email admin@example.com
 
 # With custom certificate
-sudo ./scripts/install-stackbill-poc.sh \
+sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --ssl-cert /path/to/fullchain.pem \
     --ssl-key /path/to/privatekey.pem
