@@ -316,7 +316,6 @@ MYSQLCONF
     # Create databases and users with native password authentication
     mysql -u root <<EOF
 CREATE DATABASE IF NOT EXISTS stackbill;
-CREATE DATABASE IF NOT EXISTS apache_cloudstack;
 CREATE DATABASE IF NOT EXISTS feature_configuration;
 CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
 CREATE USER IF NOT EXISTS 'stackbill'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
