@@ -154,7 +154,6 @@ StackBill POC Installer provides a **fully automated single-command deployment**
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 1. VALIDATION                                                   │
-│    ├── Check AWS_ECR_TOKEN environment variable                 │
 │    ├── Validate --domain, --ssl-cert, --ssl-key arguments       │
 │    ├── Verify running as root                                   │
 │    └── Get server IP address                                    │
@@ -680,24 +679,38 @@ TLS Termination:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ECR AUTHENTICATION FLOW                      │
+│                ECR AUTHENTICATION FLOW (AUTOMATIC)              │
 └─────────────────────────────────────────────────────────────────┘
 
-1. User provides AWS_ECR_TOKEN:
-   export AWS_ECR_TOKEN="eyJwYXlsb2..."
+1. Script installs AWS CLI (if not present):
+   install_aws_cli()
+   └── Downloads and installs AWS CLI v2
 
-2. Script creates Kubernetes secret:
+2. Script fetches ECR token automatically:
+   fetch_ecr_token()
+   ├── Uses embedded IAM credentials (pull-only permissions)
+   ├── export AWS_ACCESS_KEY_ID="..."
+   ├── export AWS_SECRET_ACCESS_KEY="..."
+   └── AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
+
+3. Script creates Kubernetes secret:
    kubectl create secret docker-registry awscred \
      --docker-server=730335576030.dkr.ecr.ap-south-1.amazonaws.com \
      --docker-username=AWS \
      --docker-password=$AWS_ECR_TOKEN
 
-3. Helm chart references secret:
+4. Helm chart references secret:
    imagePullSecrets:
      - name: awscred
 
-4. Kubelet uses secret to pull images:
+5. Kubelet uses secret to pull images:
    730335576030.dkr.ecr.ap-south-1.amazonaws.com/sb-core:latest
+
+Security Note:
+- IAM user has ONLY AmazonEC2ContainerRegistryPullOnly policy
+- Can pull images: YES
+- Can push/delete images: NO
+- Can access other AWS services: NO
 ```
 
 ### Database Security
@@ -746,7 +759,13 @@ kubectl describe pod <pod-name> -n sb-apps | grep -A10 Events
 # Verify ECR secret exists
 kubectl get secret awscred -n sb-apps
 
-# Recreate if needed
+# If secret is missing, re-run the installer (it will recreate it)
+sudo ./scripts/install-stackbill-poc.sh --domain YOUR_DOMAIN \
+  --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem \
+  --skip-infra --skip-db
+
+# Or manually fetch token and recreate (requires AWS CLI configured)
+AWS_ECR_TOKEN=$(aws ecr get-login-password --region ap-south-1)
 kubectl delete secret awscred -n sb-apps
 kubectl create secret docker-registry awscred \
   --docker-server=730335576030.dkr.ecr.ap-south-1.amazonaws.com \
@@ -864,9 +883,8 @@ kubectl exec -it <pod> -n sb-apps -- curl http://sb-core:8080/health
 ### Important Commands
 
 ```bash
-# Install
-export AWS_ECR_TOKEN="<token>"
-sudo -E ./scripts/install-stackbill-poc.sh \
+# Install (ECR auth handled automatically)
+sudo ./scripts/install-stackbill-poc.sh \
   --domain example.com \
   --ssl-cert /path/to/fullchain.pem \
   --ssl-key /path/to/privatekey.pem

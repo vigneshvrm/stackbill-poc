@@ -3,14 +3,13 @@
 # STACKBILL POC INSTALLER - FULLY AUTOMATED
 # ============================================
 # Installs StackBill directly from AWS ECR
-# NO UI wizard required - completely automated
-#
-# REQUIRED: Set AWS_ECR_TOKEN environment variable before running:
-#   export AWS_ECR_TOKEN="your-ecr-token-here"
+# Interactive mode: prompts for domain and SSL configuration
 #
 # Usage:
-#   export AWS_ECR_TOKEN="eyJwYXlsb2..."
-#   sudo -E ./install-stackbill-poc.sh --domain DOMAIN --ssl-cert CERT --ssl-key KEY
+#   sudo ./install-stackbill-poc.sh
+#   sudo ./install-stackbill-poc.sh --domain DOMAIN --ssl-cert CERT --ssl-key KEY
+#
+# ECR authentication is handled automatically using embedded credentials.
 # ============================================
 
 set -e
@@ -31,11 +30,19 @@ ISTIO_VERSION="1.20.3"
 STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
 ECR_REGISTRY="730335576030.dkr.ecr.ap-south-1.amazonaws.com"
 
+# AWS ECR Credentials (Pull-Only IAM User)
+# This IAM user has ONLY AmazonEC2ContainerRegistryPullOnly policy
+# It can ONLY pull images - no push/delete/modify permissions
+ECR_AWS_ACCESS_KEY="AKIA2UC3EP7PNXBH5GNP"
+ECR_AWS_SECRET_KEY="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"
+ECR_REGION="ap-south-1"
+
 # User inputs
 DOMAIN=""
 SSL_CERT=""
 SSL_KEY=""
-EMAIL="admin@stackbill.local"
+EMAIL=""
+SSL_MODE=""  # "letsencrypt" or "custom"
 
 # Auto-generated passwords
 MYSQL_PASSWORD=""
@@ -59,16 +66,19 @@ log_step() {
 }
 
 print_banner() {
+    echo ""
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════════╗"
-    echo "║         STACKBILL POC INSTALLER - FULLY AUTOMATED            ║"
+    echo "║            STACKBILL POC INSTALLER                            ║"
     echo "╠═══════════════════════════════════════════════════════════════╣"
-    echo "║  This script installs StackBill automatically:               ║"
-    echo "║    - K3s Kubernetes with Istio service mesh                  ║"
-    echo "║    - MySQL, MongoDB, RabbitMQ on host                        ║"
-    echo "║    - StackBill from AWS ECR (no UI wizard needed)            ║"
+    echo "║  This script will install:                                    ║"
+    echo "║    • K3s Kubernetes with Istio service mesh                   ║"
+    echo "║    • MySQL, MongoDB, RabbitMQ databases                       ║"
+    echo "║    • StackBill Cloud Management Platform                      ║"
     echo "║                                                               ║"
-    echo "║  REQUIRED: Set AWS_ECR_TOKEN env variable before running!    ║"
+    echo "║  SSL Options:                                                 ║"
+    echo "║    • Let's Encrypt (free, automatic)                          ║"
+    echo "║    • Custom certificate (bring your own)                      ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -110,12 +120,160 @@ load_or_generate_passwords() {
     log_info "New passwords generated"
 }
 
+# ============================================
+# INTERACTIVE INPUT FUNCTIONS
+# ============================================
+
+prompt_domain() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  STEP 1: Domain Configuration${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Enter the domain name for your StackBill portal."
+    echo "Example: stackbill.example.com"
+    echo ""
+
+    while [[ -z "$DOMAIN" ]]; do
+        read -p "Domain name: " DOMAIN
+
+        # Basic validation
+        if [[ -z "$DOMAIN" ]]; then
+            echo -e "${RED}Domain name cannot be empty. Please try again.${NC}"
+        elif [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            echo -e "${YELLOW}Warning: '$DOMAIN' may not be a valid domain format.${NC}"
+            read -p "Continue with this domain? [y/N]: " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                DOMAIN=""
+            fi
+        fi
+    done
+
+    echo ""
+    log_info "Domain set to: $DOMAIN"
+}
+
+prompt_ssl_option() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  STEP 2: SSL Certificate Configuration${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "How would you like to configure SSL?"
+    echo ""
+    echo -e "  ${GREEN}1)${NC} Let's Encrypt (Automatic) - FREE certificate, auto-renewed"
+    echo "     Requires: Domain DNS must point to this server"
+    echo ""
+    echo -e "  ${GREEN}2)${NC} Custom Certificate - Provide your own certificate files"
+    echo "     Requires: fullchain.pem and privatekey.pem files"
+    echo ""
+
+    while [[ -z "$SSL_MODE" ]]; do
+        read -p "Select option [1 or 2]: " ssl_choice
+
+        case $ssl_choice in
+            1)
+                SSL_MODE="letsencrypt"
+                prompt_letsencrypt_email
+                ;;
+            2)
+                SSL_MODE="custom"
+                prompt_custom_certificates
+                ;;
+            *)
+                echo -e "${RED}Invalid option. Please enter 1 or 2.${NC}"
+                ;;
+        esac
+    done
+}
+
+prompt_letsencrypt_email() {
+    echo ""
+    echo "Let's Encrypt requires an email address for certificate notifications."
+    echo ""
+
+    while [[ -z "$EMAIL" ]]; do
+        read -p "Email address: " EMAIL
+
+        if [[ -z "$EMAIL" ]]; then
+            echo -e "${RED}Email cannot be empty for Let's Encrypt.${NC}"
+        elif [[ ! "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+            echo -e "${YELLOW}Warning: '$EMAIL' may not be a valid email format.${NC}"
+            read -p "Continue with this email? [y/N]: " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                EMAIL=""
+            fi
+        fi
+    done
+
+    echo ""
+    log_info "Email set to: $EMAIL"
+    log_info "SSL Mode: Let's Encrypt (automatic)"
+}
+
+prompt_custom_certificates() {
+    echo ""
+    echo "Please provide the paths to your SSL certificate files."
+    echo ""
+
+    # Get certificate path
+    while [[ -z "$SSL_CERT" || ! -f "$SSL_CERT" ]]; do
+        read -p "Path to SSL certificate (fullchain.pem): " SSL_CERT
+
+        if [[ -z "$SSL_CERT" ]]; then
+            echo -e "${RED}Path cannot be empty.${NC}"
+        elif [[ ! -f "$SSL_CERT" ]]; then
+            echo -e "${RED}File not found: $SSL_CERT${NC}"
+            SSL_CERT=""
+        fi
+    done
+
+    # Get private key path
+    while [[ -z "$SSL_KEY" || ! -f "$SSL_KEY" ]]; do
+        read -p "Path to private key (privatekey.pem): " SSL_KEY
+
+        if [[ -z "$SSL_KEY" ]]; then
+            echo -e "${RED}Path cannot be empty.${NC}"
+        elif [[ ! -f "$SSL_KEY" ]]; then
+            echo -e "${RED}File not found: $SSL_KEY${NC}"
+            SSL_KEY=""
+        fi
+    done
+
+    # Set a default email for custom certs
+    EMAIL="admin@${DOMAIN}"
+
+    echo ""
+    log_info "SSL Certificate: $SSL_CERT"
+    log_info "SSL Private Key: $SSL_KEY"
+    log_info "SSL Mode: Custom certificate"
+}
+
+run_interactive_setup() {
+    # Only run interactive setup if domain is not already set via args
+    if [[ -z "$DOMAIN" ]]; then
+        prompt_domain
+    fi
+
+    # Only run SSL setup if not already configured via args
+    if [[ -z "$SSL_MODE" ]]; then
+        if [[ -n "$SSL_CERT" && -n "$SSL_KEY" ]]; then
+            # User provided certs via command line
+            SSL_MODE="custom"
+            EMAIL="${EMAIL:-admin@${DOMAIN}}"
+        else
+            prompt_ssl_option
+        fi
+    fi
+}
+
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --domain) DOMAIN="$2"; shift 2 ;;
             --ssl-cert) SSL_CERT="$2"; shift 2 ;;
             --ssl-key) SSL_KEY="$2"; shift 2 ;;
+            --letsencrypt) SSL_MODE="letsencrypt"; shift ;;
             --email) EMAIL="$2"; shift 2 ;;
             --skip-infra) SKIP_INFRA=true; shift ;;
             --skip-db) SKIP_DB=true; shift ;;
@@ -127,66 +285,83 @@ parse_args() {
 }
 
 show_help() {
-    echo "Usage: $0 --domain DOMAIN --ssl-cert CERT --ssl-key KEY [OPTIONS]"
+    echo "StackBill POC Installer"
     echo ""
-    echo "IMPORTANT: Set AWS_ECR_TOKEN environment variable before running!"
+    echo "Usage:"
+    echo "  sudo $0                    # Interactive mode (recommended)"
+    echo "  sudo $0 [OPTIONS]          # Non-interactive mode"
     echo ""
-    echo "Example:"
-    echo "  export AWS_ECR_TOKEN=\"your-ecr-token-here\""
-    echo "  sudo -E $0 --domain stackbill.example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo "Interactive Mode:"
+    echo "  Run without arguments to be guided through the setup:"
+    echo "    1. Enter your domain name"
+    echo "    2. Choose SSL option:"
+    echo "       - Let's Encrypt (free, automatic)"
+    echo "       - Custom certificate (provide your own files)"
     echo ""
-    echo "Required:"
-    echo "  AWS_ECR_TOKEN  Environment variable with ECR authentication token"
+    echo "Non-Interactive Options:"
     echo "  --domain       Domain name for StackBill (e.g., stackbill.example.com)"
     echo "  --ssl-cert     Path to SSL certificate file (fullchain.pem)"
     echo "  --ssl-key      Path to SSL private key file (privatekey.pem)"
-    echo ""
-    echo "Optional:"
-    echo "  --email        Email for notifications (default: admin@stackbill.local)"
+    echo "  --letsencrypt  Use Let's Encrypt for SSL (requires --email)"
+    echo "  --email        Email for Let's Encrypt notifications"
     echo "  --skip-infra   Skip K3s/Istio installation (use existing cluster)"
     echo "  --skip-db      Skip database installation (use existing databases)"
     echo "  -h, --help     Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  # Interactive (recommended)"
+    echo "  sudo $0"
+    echo ""
+    echo "  # With custom certificate"
+    echo "  sudo $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo ""
+    echo "  # With Let's Encrypt"
+    echo "  sudo $0 --domain example.com --letsencrypt --email admin@example.com"
 }
 
 validate_inputs() {
     log_info "Validating inputs..."
 
-    # Check AWS ECR token
-    if [[ -z "$AWS_ECR_TOKEN" ]]; then
-        log_error "AWS_ECR_TOKEN environment variable is required"
-        echo ""
-        echo "Please set the ECR token before running:"
-        echo "  export AWS_ECR_TOKEN=\"your-token-here\""
-        echo "  sudo -E $0 --domain DOMAIN --ssl-cert CERT --ssl-key KEY"
-        echo ""
-        echo "Note: Use 'sudo -E' to preserve environment variables"
-        exit 1
-    fi
-    log_info "  AWS ECR Token: [set]"
-
-    if [[ -z "$DOMAIN" ]]; then
-        log_error "Domain required (--domain)"
-        exit 1
-    fi
-    log_info "  Domain: $DOMAIN"
-
-    if [[ -z "$SSL_CERT" || ! -f "$SSL_CERT" ]]; then
-        log_error "SSL certificate file not found: $SSL_CERT"
-        exit 1
-    fi
-    log_info "  SSL Cert: $SSL_CERT"
-
-    if [[ -z "$SSL_KEY" || ! -f "$SSL_KEY" ]]; then
-        log_error "SSL key file not found: $SSL_KEY"
-        exit 1
-    fi
-    log_info "  SSL Key: $SSL_KEY"
-
+    # Check root first
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root (use sudo)"
         exit 1
     fi
     log_info "  Running as root: yes"
+
+    # Domain is always required
+    if [[ -z "$DOMAIN" ]]; then
+        log_error "Domain is required"
+        exit 1
+    fi
+    log_info "  Domain: $DOMAIN"
+
+    # Validate SSL configuration
+    if [[ "$SSL_MODE" == "letsencrypt" ]]; then
+        # Let's Encrypt mode - need email
+        if [[ -z "$EMAIL" ]]; then
+            log_error "Email is required for Let's Encrypt (--email)"
+            exit 1
+        fi
+        log_info "  SSL Mode: Let's Encrypt"
+        log_info "  Email: $EMAIL"
+    elif [[ "$SSL_MODE" == "custom" ]]; then
+        # Custom certificate mode - need cert files
+        if [[ -z "$SSL_CERT" || ! -f "$SSL_CERT" ]]; then
+            log_error "SSL certificate file not found: $SSL_CERT"
+            exit 1
+        fi
+        if [[ -z "$SSL_KEY" || ! -f "$SSL_KEY" ]]; then
+            log_error "SSL key file not found: $SSL_KEY"
+            exit 1
+        fi
+        log_info "  SSL Mode: Custom certificate"
+        log_info "  SSL Cert: $SSL_CERT"
+        log_info "  SSL Key: $SSL_KEY"
+    else
+        log_error "SSL mode not configured"
+        exit 1
+    fi
 
     log_info "Validation passed!"
     return 0
@@ -195,6 +370,161 @@ validate_inputs() {
 get_server_ip() {
     SERVER_IP=$(hostname -I | awk '{print $1}')
     log_info "Server IP: $SERVER_IP"
+}
+
+# ============================================
+# AWS CLI & TOKEN FETCHING
+# ============================================
+
+install_aws_cli() {
+    log_step "Installing AWS CLI"
+
+    if command -v aws &>/dev/null; then
+        log_info "AWS CLI already installed: $(aws --version)"
+        return 0
+    fi
+
+    log_info "Downloading AWS CLI..."
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+
+    log_info "Installing AWS CLI..."
+    unzip -q /tmp/awscliv2.zip -d /tmp
+    /tmp/aws/install --update
+
+    # Cleanup
+    rm -rf /tmp/aws /tmp/awscliv2.zip
+
+    log_info "AWS CLI installed: $(aws --version)"
+}
+
+fetch_ecr_token() {
+    log_step "Fetching ECR Authentication Token"
+
+    # Set credentials temporarily for AWS CLI
+    export AWS_ACCESS_KEY_ID="$ECR_AWS_ACCESS_KEY"
+    export AWS_SECRET_ACCESS_KEY="$ECR_AWS_SECRET_KEY"
+    export AWS_DEFAULT_REGION="$ECR_REGION"
+
+    log_info "Authenticating with AWS ECR..."
+
+    # Fetch ECR token using AWS CLI
+    AWS_ECR_TOKEN=$(aws ecr get-login-password --region "$ECR_REGION" 2>/dev/null)
+
+    if [[ -z "$AWS_ECR_TOKEN" ]]; then
+        log_error "Failed to fetch ECR token from AWS"
+        log_error "Please check the AWS credentials in the script"
+        exit 1
+    fi
+
+    log_info "ECR authentication token fetched successfully"
+
+    # Clear credentials from environment (token is now stored in AWS_ECR_TOKEN)
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION
+}
+
+# ============================================
+# SSL CERTIFICATE SETUP
+# ============================================
+
+install_certbot() {
+    log_step "Installing Certbot for Let's Encrypt"
+
+    if command -v certbot &>/dev/null; then
+        log_info "Certbot already installed: $(certbot --version 2>&1 | head -1)"
+        return 0
+    fi
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq certbot
+
+    log_info "Certbot installed successfully"
+}
+
+generate_letsencrypt_cert() {
+    log_step "Generating Let's Encrypt SSL Certificate"
+
+    # Certificate paths
+    SSL_CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+    SSL_KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+
+    # Check if certificate already exists and is valid
+    if [[ -f "$SSL_CERT" && -f "$SSL_KEY" ]]; then
+        log_info "Existing Let's Encrypt certificate found"
+
+        # Check if certificate is still valid (not expiring in next 7 days)
+        if openssl x509 -checkend 604800 -noout -in "$SSL_CERT" 2>/dev/null; then
+            log_info "Certificate is still valid, using existing certificate"
+            return 0
+        else
+            log_warn "Certificate is expiring soon, renewing..."
+        fi
+    fi
+
+    log_info "Requesting certificate for: $DOMAIN"
+    log_info "Email: $EMAIL"
+    echo ""
+    echo -e "${YELLOW}IMPORTANT: Make sure DNS for $DOMAIN points to this server!${NC}"
+    echo -e "${YELLOW}The certificate request will fail if DNS is not configured.${NC}"
+    echo ""
+
+    # Stop any service using port 80 temporarily
+    local port80_pid=$(lsof -ti:80 2>/dev/null || true)
+    if [[ -n "$port80_pid" ]]; then
+        log_warn "Port 80 is in use. Attempting to proceed with webroot method..."
+    fi
+
+    # Try standalone mode first (works if port 80 is free)
+    if certbot certonly \
+        --standalone \
+        --non-interactive \
+        --agree-tos \
+        --email "$EMAIL" \
+        --domain "$DOMAIN" \
+        --preferred-challenges http \
+        2>/dev/null; then
+        log_info "Certificate generated successfully!"
+    else
+        log_error "Failed to generate Let's Encrypt certificate"
+        echo ""
+        echo -e "${RED}Possible causes:${NC}"
+        echo "  1. DNS for $DOMAIN does not point to this server"
+        echo "  2. Port 80 is blocked by firewall"
+        echo "  3. Rate limit exceeded (try again later)"
+        echo ""
+        echo "You can:"
+        echo "  - Fix the issue and re-run the installer"
+        echo "  - Use option 2 (custom certificate) instead"
+        exit 1
+    fi
+
+    log_info "SSL Certificate: $SSL_CERT"
+    log_info "SSL Private Key: $SSL_KEY"
+}
+
+setup_certificate_renewal() {
+    log_info "Setting up automatic certificate renewal..."
+
+    # Create renewal hook to reload Istio
+    mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+    cat > /etc/letsencrypt/renewal-hooks/deploy/reload-istio.sh <<'EOF'
+#!/bin/bash
+# Reload Istio TLS secret after certificate renewal
+DOMAIN=$(basename $(dirname $RENEWED_LINEAGE))
+kubectl create secret tls istio-ingressgateway-certs \
+    --cert="$RENEWED_LINEAGE/fullchain.pem" \
+    --key="$RENEWED_LINEAGE/privkey.pem" \
+    -n istio-system \
+    --dry-run=client -o yaml | kubectl apply -f -
+echo "Istio TLS secret updated for $DOMAIN"
+EOF
+    chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-istio.sh
+
+    # Enable certbot timer for automatic renewal
+    systemctl enable certbot.timer 2>/dev/null || true
+    systemctl start certbot.timer 2>/dev/null || true
+
+    log_info "Automatic certificate renewal configured"
 }
 
 # ============================================
@@ -683,20 +1013,59 @@ print_summary() {
 
 main() {
     print_banner
+
+    # Parse command-line arguments first
+    parse_args "$@"
+
+    # Run interactive setup for any missing configuration
+    run_interactive_setup
+
+    # Show configuration summary before proceeding
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  Configuration Summary${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "  Domain:     $DOMAIN"
+    echo "  SSL Mode:   $SSL_MODE"
+    if [[ "$SSL_MODE" == "letsencrypt" ]]; then
+        echo "  Email:      $EMAIL"
+    else
+        echo "  SSL Cert:   $SSL_CERT"
+        echo "  SSL Key:    $SSL_KEY"
+    fi
+    echo ""
+    read -p "Proceed with installation? [Y/n]: " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        log_info "Installation cancelled."
+        exit 0
+    fi
+
     log_info "Starting fully automated installation..."
 
-    parse_args "$@"
+    # Validate inputs
     validate_inputs
     get_server_ip
 
     # Load existing or generate new passwords
     load_or_generate_passwords
 
+    # Install AWS CLI and fetch ECR token automatically
+    install_aws_cli
+    fetch_ecr_token
+
     # Infrastructure
     if [[ "$SKIP_INFRA" != "true" ]]; then
         install_k3s
         install_helm
         install_istio
+    fi
+
+    # Generate Let's Encrypt certificate if selected
+    if [[ "$SSL_MODE" == "letsencrypt" ]]; then
+        install_certbot
+        generate_letsencrypt_cert
+        setup_certificate_renewal
     fi
 
     # Databases on host

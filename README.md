@@ -23,24 +23,33 @@ This installer provides a **completely automated POC installation**:
 
 ## Quick Start
 
+### One-Line Install
+
 ```bash
-# Clone the repository
-git clone https://github.com/vigneshvrm/stackbill-poc.git
-cd stackbill-poc
-
-# Set AWS ECR token (provided by StackBill)
-export AWS_ECR_TOKEN="your-ecr-token-here"
-
-# Run the installer (use -E to preserve env vars)
-sudo -E ./scripts/install-stackbill-poc.sh \
-    --domain your-domain.com \
-    --ssl-cert /path/to/fullchain.pem \
-    --ssl-key /path/to/privatekey.pem
+curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh -o /tmp/stackbill-install.sh && sudo bash /tmp/stackbill-install.sh
 ```
 
-That's it! The script will install everything automatically.
+### Or Clone and Install
 
-**Note:** The `AWS_ECR_TOKEN` is required to pull StackBill container images from the private registry. Contact StackBill support if you don't have this token.
+```bash
+git clone https://github.com/vigneshvrm/stackbill-poc.git
+cd stackbill-poc
+sudo ./scripts/install-stackbill-poc.sh
+```
+
+The installer will prompt you for:
+1. **Domain name** - Your StackBill portal domain (e.g., `stackbill.example.com`)
+2. **SSL Certificate** - Choose one:
+   - **Let's Encrypt** (recommended) - Free, automatic certificate
+   - **Custom Certificate** - Provide your own fullchain.pem and privatekey.pem
+
+That's it! The script will install everything automatically:
+- K3s Kubernetes cluster
+- Istio service mesh
+- MySQL, MongoDB, RabbitMQ databases
+- StackBill application
+
+**Note:** All authentication (AWS ECR, databases) is handled automatically!
 
 ## What Gets Installed
 
@@ -56,14 +65,36 @@ That's it! The script will install everything automatically.
 
 ## Command Line Options
 
-| Option | Required | Description |
-|--------|----------|-------------|
-| `--domain` | Yes | Domain name for StackBill portal |
-| `--ssl-cert` | Yes | Path to SSL certificate (fullchain.pem) |
-| `--ssl-key` | Yes | Path to SSL private key (privatekey.pem) |
-| `--email` | No | Admin email (default: admin@stackbill.local) |
-| `--skip-infra` | No | Skip K3s/Istio installation |
-| `--skip-db` | No | Skip database installation |
+Run without arguments for interactive mode, or use these options for non-interactive installation:
+
+| Option | Description |
+|--------|-------------|
+| `--domain` | Domain name for StackBill portal |
+| `--letsencrypt` | Use Let's Encrypt for SSL (requires --email) |
+| `--email` | Email for Let's Encrypt certificate notifications |
+| `--ssl-cert` | Path to custom SSL certificate (fullchain.pem) |
+| `--ssl-key` | Path to custom SSL private key (privatekey.pem) |
+| `--skip-infra` | Skip K3s/Istio installation |
+| `--skip-db` | Skip database installation |
+
+### Examples
+
+```bash
+# Interactive mode (recommended)
+sudo ./scripts/install-stackbill-poc.sh
+
+# With Let's Encrypt SSL
+sudo ./scripts/install-stackbill-poc.sh \
+    --domain stackbill.example.com \
+    --letsencrypt \
+    --email admin@example.com
+
+# With custom certificate
+sudo ./scripts/install-stackbill-poc.sh \
+    --domain stackbill.example.com \
+    --ssl-cert /path/to/fullchain.pem \
+    --ssl-key /path/to/privatekey.pem
+```
 
 ## Post-Installation
 
