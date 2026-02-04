@@ -5,8 +5,12 @@
 # Installs StackBill directly from AWS ECR
 # NO UI wizard required - completely automated
 #
+# REQUIRED: Set AWS_ECR_TOKEN environment variable before running:
+#   export AWS_ECR_TOKEN="your-ecr-token-here"
+#
 # Usage:
-#   sudo ./install-stackbill-poc.sh --domain DOMAIN --ssl-cert CERT --ssl-key KEY
+#   export AWS_ECR_TOKEN="eyJwYXlsb2..."
+#   sudo -E ./install-stackbill-poc.sh --domain DOMAIN --ssl-cert CERT --ssl-key KEY
 # ============================================
 
 set -e
@@ -25,6 +29,7 @@ STACKBILL_NAMESPACE="sb-apps"
 K3S_VERSION="v1.29.0+k3s1"
 ISTIO_VERSION="1.20.3"
 STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
+ECR_REGISTRY="730335576030.dkr.ecr.ap-south-1.amazonaws.com"
 
 # User inputs
 DOMAIN=""
@@ -62,12 +67,47 @@ print_banner() {
     echo "║    - K3s Kubernetes with Istio service mesh                  ║"
     echo "║    - MySQL, MongoDB, RabbitMQ on host                        ║"
     echo "║    - StackBill from AWS ECR (no UI wizard needed)            ║"
+    echo "║                                                               ║"
+    echo "║  REQUIRED: Set AWS_ECR_TOKEN env variable before running!    ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
 generate_password() {
     openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16
+}
+
+CREDENTIALS_FILE="$HOME/stackbill-credentials.txt"
+
+load_or_generate_passwords() {
+    # Check if credentials file exists from a previous installation
+    if [[ -f "$CREDENTIALS_FILE" ]]; then
+        log_info "Found existing credentials file: $CREDENTIALS_FILE"
+
+        # Extract passwords from credentials file
+        local mysql_pw=$(grep -A5 "^MYSQL:" "$CREDENTIALS_FILE" | grep "Password:" | awk '{print $2}')
+        local mongo_pw=$(grep -A5 "^MONGODB:" "$CREDENTIALS_FILE" | grep "Password:" | awk '{print $2}')
+        local rabbit_pw=$(grep -A5 "^RABBITMQ:" "$CREDENTIALS_FILE" | grep "Password:" | awk '{print $2}')
+
+        # Use existing passwords if found, otherwise generate new
+        if [[ -n "$mysql_pw" && -n "$mongo_pw" && -n "$rabbit_pw" ]]; then
+            MYSQL_PASSWORD="$mysql_pw"
+            MONGODB_PASSWORD="$mongo_pw"
+            RABBITMQ_PASSWORD="$rabbit_pw"
+            log_info "Loaded existing passwords from credentials file"
+            log_info "  (To generate new passwords, delete $CREDENTIALS_FILE and re-run)"
+            return 0
+        else
+            log_warn "Credentials file incomplete, generating new passwords"
+        fi
+    fi
+
+    # Generate new passwords
+    log_info "Generating new passwords..."
+    MYSQL_PASSWORD=$(generate_password)
+    MONGODB_PASSWORD=$(generate_password)
+    RABBITMQ_PASSWORD=$(generate_password)
+    log_info "New passwords generated"
 }
 
 parse_args() {
@@ -89,20 +129,40 @@ parse_args() {
 show_help() {
     echo "Usage: $0 --domain DOMAIN --ssl-cert CERT --ssl-key KEY [OPTIONS]"
     echo ""
+    echo "IMPORTANT: Set AWS_ECR_TOKEN environment variable before running!"
+    echo ""
+    echo "Example:"
+    echo "  export AWS_ECR_TOKEN=\"your-ecr-token-here\""
+    echo "  sudo -E $0 --domain stackbill.example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo ""
     echo "Required:"
-    echo "  --domain      Domain name for StackBill (e.g., stackbill.example.com)"
-    echo "  --ssl-cert    Path to SSL certificate file (fullchain.pem)"
-    echo "  --ssl-key     Path to SSL private key file (privatekey.pem)"
+    echo "  AWS_ECR_TOKEN  Environment variable with ECR authentication token"
+    echo "  --domain       Domain name for StackBill (e.g., stackbill.example.com)"
+    echo "  --ssl-cert     Path to SSL certificate file (fullchain.pem)"
+    echo "  --ssl-key      Path to SSL private key file (privatekey.pem)"
     echo ""
     echo "Optional:"
-    echo "  --email       Email for notifications (default: admin@stackbill.local)"
-    echo "  --skip-infra  Skip K3s/Istio installation (use existing cluster)"
-    echo "  --skip-db     Skip database installation (use existing databases)"
-    echo "  -h, --help    Show this help message"
+    echo "  --email        Email for notifications (default: admin@stackbill.local)"
+    echo "  --skip-infra   Skip K3s/Istio installation (use existing cluster)"
+    echo "  --skip-db      Skip database installation (use existing databases)"
+    echo "  -h, --help     Show this help message"
 }
 
 validate_inputs() {
     log_info "Validating inputs..."
+
+    # Check AWS ECR token
+    if [[ -z "$AWS_ECR_TOKEN" ]]; then
+        log_error "AWS_ECR_TOKEN environment variable is required"
+        echo ""
+        echo "Please set the ECR token before running:"
+        echo "  export AWS_ECR_TOKEN=\"your-token-here\""
+        echo "  sudo -E $0 --domain DOMAIN --ssl-cert CERT --ssl-key KEY"
+        echo ""
+        echo "Note: Use 'sudo -E' to preserve environment variables"
+        exit 1
+    fi
+    log_info "  AWS ECR Token: [set]"
 
     if [[ -z "$DOMAIN" ]]; then
         log_error "Domain required (--domain)"
@@ -208,8 +268,14 @@ install_mysql() {
 
     if systemctl is-active --quiet mysql 2>/dev/null; then
         log_info "MySQL already running"
-        mysql -u root -e "CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';" 2>/dev/null || true
-        mysql -u root -e "GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;" 2>/dev/null || true
+        # Update user with native password authentication
+        mysql -u root <<EOF || true
+ALTER USER 'stackbill'@'%' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
+ALTER USER 'stackbill'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+EOF
         return 0
     fi
 
@@ -225,20 +291,42 @@ install_mysql() {
         sleep 2
     done
 
+    # Configure MySQL for StackBill
+    cat > /etc/mysql/mysql.conf.d/stackbill.cnf <<'MYSQLCONF'
+[mysqld]
+bind-address = 0.0.0.0
+sql_mode = NO_ENGINE_SUBSTITUTION,STRICT_TRANS_TABLES
+wait_timeout = 28800
+interactive_timeout = 230400
+connect_timeout = 36000
+max_connections = 1000
+max_connect_errors = 100000
+skip-host-cache
+skip-name-resolve
+log_bin_trust_function_creators = 1
+MYSQLCONF
+
+    systemctl restart mysql
+
+    for i in {1..30}; do
+        mysqladmin ping -h localhost --silent 2>/dev/null && break
+        sleep 2
+    done
+
+    # Create databases and users with native password authentication
     mysql -u root <<EOF
 CREATE DATABASE IF NOT EXISTS stackbill;
 CREATE DATABASE IF NOT EXISTS apache_cloudstack;
-CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
-CREATE USER IF NOT EXISTS 'stackbill'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
+CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
+CREATE USER IF NOT EXISTS 'stackbill'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'localhost' WITH GRANT OPTION;
+SET GLOBAL log_bin_trust_function_creators = 1;
+SET GLOBAL max_connect_errors = 100000;
 FLUSH PRIVILEGES;
 EOF
 
-    sed -i 's/bind-address\s*=\s*127.0.0.1/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || true
-    systemctl restart mysql
-
-    log_info "MySQL installed - User: stackbill"
+    log_info "MySQL installed with StackBill configuration - User: stackbill"
 }
 
 install_mongodb() {
@@ -258,6 +346,19 @@ install_mongodb() {
     apt-get update -qq
     apt-get install -y -qq mongodb-org
 
+    # Create directories
+    mkdir -p /var/lib/mongodb
+    mkdir -p /var/log/mongodb
+    chown -R mongodb:mongodb /var/lib/mongodb
+    chown -R mongodb:mongodb /var/log/mongodb
+
+    # Generate encryption keyFile
+    log_info "Generating MongoDB encryption keyFile..."
+    openssl rand -base64 32 | head -c 64 > /var/lib/mongodb/encryption
+    chown mongodb:mongodb /var/lib/mongodb/encryption
+    chmod 600 /var/lib/mongodb/encryption
+
+    # Create MongoDB configuration
     cat > /etc/mongod.conf <<'EOF'
 storage:
   dbPath: /var/lib/mongodb
@@ -272,8 +373,6 @@ processManagement:
   timeZoneInfo: /usr/share/zoneinfo
 EOF
 
-    mkdir -p /var/lib/mongodb
-    chown -R mongodb:mongodb /var/lib/mongodb
     systemctl start mongod
     systemctl enable mongod
 
@@ -282,6 +381,7 @@ EOF
         sleep 2
     done
 
+    # Create admin user
     mongosh --quiet <<EOF || true
 use admin
 db.createUser({
@@ -294,13 +394,22 @@ db.createUser({
 })
 EOF
 
+    # Enable security settings
     cat >> /etc/mongod.conf <<'EOF'
+
+# Security settings
 security:
   authorization: enabled
 EOF
+
     systemctl restart mongod
 
-    log_info "MongoDB installed - User: stackbill"
+    for i in {1..30}; do
+        mongosh --quiet -u stackbill -p "${MONGODB_PASSWORD}" --authenticationDatabase admin --eval "db.runCommand('ping').ok" 2>/dev/null && break
+        sleep 2
+    done
+
+    log_info "MongoDB installed with security enabled - User: stackbill"
 }
 
 install_rabbitmq() {
@@ -366,6 +475,22 @@ setup_namespace() {
     kubectl label namespace $STACKBILL_NAMESPACE istio-injection=enabled --overwrite
 
     log_info "Namespace $STACKBILL_NAMESPACE ready"
+}
+
+setup_ecr_credentials() {
+    log_step "Setting up AWS ECR Credentials"
+
+    # Delete existing secret if present
+    kubectl delete secret awscred -n $STACKBILL_NAMESPACE 2>/dev/null || true
+
+    # Create docker-registry secret for AWS ECR
+    kubectl create secret docker-registry awscred \
+        --docker-server="$ECR_REGISTRY" \
+        --docker-username=AWS \
+        --docker-password="$AWS_ECR_TOKEN" \
+        -n $STACKBILL_NAMESPACE
+
+    log_info "ECR credentials secret 'awscred' created"
 }
 
 setup_tls_secret() {
@@ -483,9 +608,7 @@ wait_for_pods() {
 # ============================================
 
 save_credentials() {
-    local CREDS_FILE="$HOME/stackbill-credentials.txt"
-
-    cat > "$CREDS_FILE" <<EOF
+    cat > "$CREDENTIALS_FILE" <<EOF
 ================================================================================
 STACKBILL POC CREDENTIALS
 Generated: $(date)
@@ -522,8 +645,8 @@ NFS:
 
 ================================================================================
 EOF
-    chmod 600 "$CREDS_FILE"
-    log_info "Credentials saved to: $CREDS_FILE"
+    chmod 600 "$CREDENTIALS_FILE"
+    log_info "Credentials saved to: $CREDENTIALS_FILE"
 }
 
 print_summary() {
@@ -566,11 +689,8 @@ main() {
     validate_inputs
     get_server_ip
 
-    # Generate passwords
-    MYSQL_PASSWORD=$(generate_password)
-    MONGODB_PASSWORD=$(generate_password)
-    RABBITMQ_PASSWORD=$(generate_password)
-    log_info "Passwords generated"
+    # Load existing or generate new passwords
+    load_or_generate_passwords
 
     # Infrastructure
     if [[ "$SKIP_INFRA" != "true" ]]; then
@@ -589,6 +709,7 @@ main() {
 
     # Deploy StackBill directly
     setup_namespace
+    setup_ecr_credentials
     setup_tls_secret
     deploy_stackbill
     setup_istio_gateway

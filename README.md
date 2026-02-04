@@ -28,14 +28,19 @@ This installer provides a **completely automated POC installation**:
 git clone https://github.com/vigneshvrm/stackbill-poc.git
 cd stackbill-poc
 
-# Run the installer
-sudo ./scripts/install-stackbill-poc.sh \
+# Set AWS ECR token (provided by StackBill)
+export AWS_ECR_TOKEN="your-ecr-token-here"
+
+# Run the installer (use -E to preserve env vars)
+sudo -E ./scripts/install-stackbill-poc.sh \
     --domain your-domain.com \
     --ssl-cert /path/to/fullchain.pem \
     --ssl-key /path/to/privatekey.pem
 ```
 
 That's it! The script will install everything automatically.
+
+**Note:** The `AWS_ECR_TOKEN` is required to pull StackBill container images from the private registry. Contact StackBill support if you don't have this token.
 
 ## What Gets Installed
 
