@@ -414,12 +414,27 @@ fetch_ecr_token() {
 
     log_info "Authenticating with AWS ECR..."
 
-    # Fetch ECR token using AWS CLI
-    AWS_ECR_TOKEN=$(aws ecr get-login-password --region "$ECR_REGION" 2>/dev/null)
+    # Fetch ECR token using AWS CLI (capture both output and errors)
+    local ecr_output
+    local ecr_exit_code
+
+    # Temporarily disable set -e for this command
+    set +e
+    ecr_output=$(aws ecr get-login-password --region "$ECR_REGION" 2>&1)
+    ecr_exit_code=$?
+    set -e
+
+    if [[ $ecr_exit_code -ne 0 ]]; then
+        log_error "Failed to fetch ECR token from AWS (exit code: $ecr_exit_code)"
+        log_error "AWS Error: $ecr_output"
+        log_error "Please check the AWS credentials in the script"
+        exit 1
+    fi
+
+    AWS_ECR_TOKEN="$ecr_output"
 
     if [[ -z "$AWS_ECR_TOKEN" ]]; then
-        log_error "Failed to fetch ECR token from AWS"
-        log_error "Please check the AWS credentials in the script"
+        log_error "ECR token is empty"
         exit 1
     fi
 
