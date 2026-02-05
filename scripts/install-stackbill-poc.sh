@@ -1028,9 +1028,18 @@ print_summary() {
     echo "  Portal: https://$DOMAIN"
     echo "  (Make sure DNS points $DOMAIN to $SERVER_IP)"
     echo ""
+    # Get actual NodePorts from istio-ingressgateway
+    local HTTPS_NODEPORT=$(kubectl get svc istio-ingressgateway -n istio-system -o jsonpath='{.spec.ports[?(@.port==443)].nodePort}' 2>/dev/null || echo "N/A")
+    local HTTP_NODEPORT=$(kubectl get svc istio-ingressgateway -n istio-system -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}' 2>/dev/null || echo "N/A")
+
     echo -e "${CYAN}DIRECT ACCESS (if DNS not configured):${NC}"
-    echo "  HTTP:  http://$SERVER_IP:31080"
-    echo "  HTTPS: https://$SERVER_IP:31443"
+    echo "  HTTP:  http://$SERVER_IP:$HTTP_NODEPORT"
+    echo "  HTTPS: https://$SERVER_IP:$HTTPS_NODEPORT"
+    echo ""
+    echo -e "${CYAN}FIREWALL RULES:${NC}"
+    echo "  Open the following ports in your firewall/security group:"
+    echo "  - TCP $HTTP_NODEPORT  (HTTP)"
+    echo "  - TCP $HTTPS_NODEPORT  (HTTPS)"
     echo ""
     echo -e "${CYAN}SERVICE CREDENTIALS:${NC}"
     echo "  MySQL:    stackbill / $MYSQL_PASSWORD"
