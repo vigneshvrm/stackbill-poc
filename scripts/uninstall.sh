@@ -226,9 +226,9 @@ delete_host_databases() {
     apt-get autoclean 2>/dev/null || true
 
     # Remove credentials file
-    if [[ -f "$HOME/stackbill-credentials.txt" ]]; then
+    if [[ -f "/root/stackbill-credentials.txt" ]]; then
         log_info "Removing credentials file..."
-        rm -f "$HOME/stackbill-credentials.txt"
+        rm -f "/root/stackbill-credentials.txt"
     fi
 
     log_info "Host databases removed completely"

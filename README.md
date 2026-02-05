@@ -110,7 +110,7 @@ If DNS is not configured, use direct IP access:
 ### View Credentials
 
 ```bash
-cat ~/stackbill-credentials.txt
+cat /root/stackbill-credentials.txt
 ```
 
 ### Check Status

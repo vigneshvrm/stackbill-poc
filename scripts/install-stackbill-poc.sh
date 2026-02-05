@@ -90,7 +90,7 @@ generate_password() {
     openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16
 }
 
-CREDENTIALS_FILE="$HOME/stackbill-credentials.txt"
+CREDENTIALS_FILE="/root/stackbill-credentials.txt"
 
 load_or_generate_passwords() {
     # Check if credentials file exists from a previous installation
@@ -1037,12 +1037,12 @@ print_summary() {
     echo "  MongoDB:  stackbill / $MONGODB_PASSWORD"
     echo "  RabbitMQ: stackbill / $RABBITMQ_PASSWORD"
     echo ""
-    echo -e "${YELLOW}Credentials saved to: $HOME/stackbill-credentials.txt${NC}"
+    echo -e "${YELLOW}Credentials saved to: /root/stackbill-credentials.txt${NC}"
     echo ""
     echo -e "${CYAN}USEFUL COMMANDS:${NC}"
     echo "  kubectl get pods -n $STACKBILL_NAMESPACE"
     echo "  kubectl logs -f <pod-name> -n $STACKBILL_NAMESPACE"
-    echo "  cat $HOME/stackbill-credentials.txt"
+    echo "  cat /root/stackbill-credentials.txt"
     echo ""
 }
 
