@@ -904,26 +904,66 @@ install_cloudstack_simulator() {
         -d \
         docker.io/apache/cloudstack-simulator
 
-    log_info "Waiting 30 seconds for CloudStack to initialize..."
-    sleep 30
-
-    log_info "Deploying CloudStack Data Center (this may take several minutes)..."
-    podman exec cloudstack-simulator \
-        python /root/tools/marvin/marvin/deployDataCenter.py \
-        -i /root/setup/dev/advanced.cfg
-
-    # Wait for CloudStack management server to be ready
-    log_info "Waiting for CloudStack Management Server to be ready..."
+    # Wait for CloudStack management server to be ready BEFORE deploying data center
+    log_info "Waiting for CloudStack Management Server to start (this may take 2-3 minutes)..."
     local max_wait=300
     local waited=0
     while [[ $waited -lt $max_wait ]]; do
-        if curl -s "http://localhost:8080/client/api?command=listZones&response=json" 2>/dev/null | grep -q "zone"; then
+        # Check if CloudStack API is responding
+        if curl -s "http://localhost:8080/client/api?command=listCapabilities&response=json" 2>/dev/null | grep -q "capability"; then
             log_info "CloudStack Management Server is ready!"
             break
         fi
         sleep 10
         waited=$((waited + 10))
-        log_info "  Still waiting... ($waited seconds)"
+        log_info "  Waiting for CloudStack to start... ($waited seconds)"
+    done
+
+    if [[ $waited -ge $max_wait ]]; then
+        log_error "CloudStack failed to start within $max_wait seconds"
+        log_info "Check logs: podman logs cloudstack-simulator"
+        return 1
+    fi
+
+    # Additional wait to ensure all services are fully initialized
+    log_info "Giving CloudStack 30 more seconds to fully initialize..."
+    sleep 30
+
+    log_info "Deploying CloudStack Data Center (this may take several minutes)..."
+    # Run deployDataCenter with retry logic
+    local deploy_attempts=0
+    local max_deploy_attempts=3
+    while [[ $deploy_attempts -lt $max_deploy_attempts ]]; do
+        deploy_attempts=$((deploy_attempts + 1))
+        log_info "Deploy attempt $deploy_attempts of $max_deploy_attempts..."
+
+        if podman exec cloudstack-simulator \
+            python /root/tools/marvin/marvin/deployDataCenter.py \
+            -i /root/setup/dev/advanced.cfg 2>&1; then
+            log_info "Data Center deployed successfully!"
+            break
+        else
+            if [[ $deploy_attempts -lt $max_deploy_attempts ]]; then
+                log_warn "Deploy failed, waiting 30 seconds before retry..."
+                sleep 30
+            else
+                log_warn "Data Center deployment failed after $max_deploy_attempts attempts"
+                log_info "CloudStack Simulator is running but may need manual configuration"
+                log_info "Access CloudStack UI at: http://$SERVER_IP:8080/client"
+            fi
+        fi
+    done
+
+    # Verify zones are available
+    log_info "Verifying CloudStack zones..."
+    waited=0
+    while [[ $waited -lt 120 ]]; do
+        if curl -s "http://localhost:8080/client/api?command=listZones&response=json" 2>/dev/null | grep -q "zone"; then
+            log_info "CloudStack zones are available!"
+            break
+        fi
+        sleep 10
+        waited=$((waited + 10))
     done
 
     if [[ $waited -ge $max_wait ]]; then
