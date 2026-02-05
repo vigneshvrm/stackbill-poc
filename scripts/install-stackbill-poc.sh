@@ -40,6 +40,14 @@ SSL_KEY=""
 EMAIL=""
 SSL_MODE=""  # "letsencrypt" or "custom"
 
+# CloudStack configuration
+CLOUDSTACK_MODE=""  # "existing" or "simulator"
+CLOUDSTACK_URL=""
+CLOUDSTACK_API_KEY=""
+CLOUDSTACK_SECRET_KEY=""
+CLOUDSTACK_ADMIN_USER=""
+CLOUDSTACK_ADMIN_PASSWORD=""
+
 # Auto-generated passwords
 MYSQL_PASSWORD=""
 MONGODB_PASSWORD=""
@@ -69,8 +77,9 @@ print_banner() {
     echo "╠═══════════════════════════════════════════════════════════════╣"
     echo "║  This script will install:                                    ║"
     echo "║    • K3s Kubernetes with Istio service mesh                   ║"
-    echo "║    • MySQL, MongoDB, RabbitMQ databases                       ║"
+    echo "║    • MariaDB, MongoDB, RabbitMQ databases                     ║"
     echo "║    • StackBill Cloud Management Platform                      ║"
+    echo "║    • CloudStack Simulator (optional, for POC)                 ║"
     echo "║                                                               ║"
     echo "║  SSL Options:                                                 ║"
     echo "║    • Let's Encrypt (free, automatic)                          ║"
@@ -255,6 +264,42 @@ prompt_custom_certificates() {
     log_info "SSL Mode: Custom certificate"
 }
 
+prompt_cloudstack_option() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  STEP 3: CloudStack Configuration${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "StackBill requires CloudStack to manage cloud infrastructure."
+    echo ""
+    echo -e "  ${GREEN}1)${NC} I have an existing CloudStack deployment"
+    echo "     You will configure CloudStack connection after installation"
+    echo ""
+    echo -e "  ${GREEN}2)${NC} Deploy CloudStack Simulator for POC/Testing"
+    echo "     We will deploy Apache CloudStack Simulator using Podman"
+    echo "     (Recommended for POC and testing environments)"
+    echo ""
+
+    while [[ -z "$CLOUDSTACK_MODE" ]]; do
+        echo -n "Select option [1 or 2]: "
+        read cs_choice < /dev/tty
+
+        case $cs_choice in
+            1)
+                CLOUDSTACK_MODE="existing"
+                log_info "CloudStack Mode: Use existing deployment"
+                ;;
+            2)
+                CLOUDSTACK_MODE="simulator"
+                log_info "CloudStack Mode: Deploy CloudStack Simulator"
+                ;;
+            *)
+                echo -e "${RED}Invalid option. Please enter 1 or 2.${NC}"
+                ;;
+        esac
+    done
+}
+
 run_interactive_setup() {
     # Only run interactive setup if domain is not already set via args
     if [[ -z "$DOMAIN" ]]; then
@@ -271,6 +316,11 @@ run_interactive_setup() {
             prompt_ssl_option
         fi
     fi
+
+    # CloudStack configuration
+    if [[ -z "$CLOUDSTACK_MODE" ]]; then
+        prompt_cloudstack_option
+    fi
 }
 
 parse_args() {
@@ -281,6 +331,8 @@ parse_args() {
             --ssl-key) SSL_KEY="$2"; shift 2 ;;
             --letsencrypt) SSL_MODE="letsencrypt"; shift ;;
             --email) EMAIL="$2"; shift 2 ;;
+            --cloudstack-existing) CLOUDSTACK_MODE="existing"; shift ;;
+            --cloudstack-simulator) CLOUDSTACK_MODE="simulator"; shift ;;
             --skip-infra) SKIP_INFRA=true; shift ;;
             --skip-db) SKIP_DB=true; shift ;;
             -h|--help) show_help; exit 0 ;;
@@ -308,29 +360,34 @@ show_help() {
     echo "    2. Choose SSL option:"
     echo "       - Let's Encrypt (free, automatic)"
     echo "       - Custom certificate (provide your own files)"
+    echo "    3. Choose CloudStack option:"
+    echo "       - Use existing CloudStack deployment"
+    echo "       - Deploy CloudStack Simulator for POC/testing"
     echo ""
     echo "Non-Interactive Options:"
-    echo "  --domain       Domain name for StackBill (e.g., stackbill.example.com)"
-    echo "  --ssl-cert     Path to SSL certificate file (fullchain.pem)"
-    echo "  --ssl-key      Path to SSL private key file (privatekey.pem)"
-    echo "  --letsencrypt  Use Let's Encrypt for SSL (requires --email)"
-    echo "  --email        Email for Let's Encrypt notifications"
-    echo "  --skip-infra   Skip K3s/Istio installation (use existing cluster)"
-    echo "  --skip-db      Skip database installation (use existing databases)"
-    echo "  -h, --help     Show this help message"
+    echo "  --domain                Domain name for StackBill (e.g., stackbill.example.com)"
+    echo "  --ssl-cert              Path to SSL certificate file (fullchain.pem)"
+    echo "  --ssl-key               Path to SSL private key file (privatekey.pem)"
+    echo "  --letsencrypt           Use Let's Encrypt for SSL (requires --email)"
+    echo "  --email                 Email for Let's Encrypt notifications"
+    echo "  --cloudstack-existing   Use existing CloudStack deployment"
+    echo "  --cloudstack-simulator  Deploy CloudStack Simulator (for POC/testing)"
+    echo "  --skip-infra            Skip K3s/Istio installation (use existing cluster)"
+    echo "  --skip-db               Skip database installation (use existing databases)"
+    echo "  -h, --help              Show this help message"
     echo ""
     echo "Examples:"
     echo "  # Interactive (recommended)"
     echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
     echo "  sudo -E $0"
     echo ""
-    echo "  # With custom certificate"
+    echo "  # With custom certificate and CloudStack Simulator"
     echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem --cloudstack-simulator"
     echo ""
-    echo "  # With Let's Encrypt"
+    echo "  # With Let's Encrypt and existing CloudStack"
     echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com"
+    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com --cloudstack-existing"
 }
 
 validate_inputs() {
@@ -771,6 +828,185 @@ setup_nfs() {
 }
 
 # ============================================
+# CLOUDSTACK SIMULATOR
+# ============================================
+
+install_podman() {
+    log_step "Installing Podman"
+
+    if command -v podman &>/dev/null; then
+        log_info "Podman already installed: $(podman --version)"
+        return 0
+    fi
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq podman-docker
+
+    # Configure Podman to allow pulling from Docker Hub
+    mkdir -p /etc/containers
+    cat > /etc/containers/registries.conf <<'EOF'
+[registries.search]
+registries = ['docker.io']
+
+[registries.insecure]
+registries = []
+
+[registries.block]
+registries = []
+EOF
+
+    log_info "Podman installed and configured for Docker Hub"
+}
+
+install_cloudstack_simulator() {
+    log_step "Deploying CloudStack Simulator"
+
+    # Check if simulator is already running
+    if podman ps --filter "name=cloudstack-simulator" --format "{{.Names}}" 2>/dev/null | grep -q "cloudstack-simulator"; then
+        log_info "CloudStack Simulator is already running"
+        CLOUDSTACK_URL="http://$SERVER_IP:8080/client"
+        return 0
+    fi
+
+    # Remove any existing stopped container
+    podman rm -f cloudstack-simulator 2>/dev/null || true
+
+    log_info "Pulling CloudStack Simulator image..."
+    podman pull apache/cloudstack-simulator
+
+    log_info "Starting CloudStack Simulator container..."
+    podman run --name cloudstack-simulator \
+        -p 8080:5050 \
+        -d \
+        apache/cloudstack-simulator
+
+    log_info "Waiting 30 seconds for CloudStack to initialize..."
+    sleep 30
+
+    log_info "Deploying CloudStack Data Center (this may take several minutes)..."
+    podman exec cloudstack-simulator \
+        python /root/tools/marvin/marvin/deployDataCenter.py \
+        -i /root/setup/dev/advanced.cfg
+
+    # Wait for CloudStack management server to be ready
+    log_info "Waiting for CloudStack Management Server to be ready..."
+    local max_wait=300
+    local waited=0
+    while [[ $waited -lt $max_wait ]]; do
+        if curl -s "http://localhost:8080/client/api?command=listZones&response=json" 2>/dev/null | grep -q "zone"; then
+            log_info "CloudStack Management Server is ready!"
+            break
+        fi
+        sleep 10
+        waited=$((waited + 10))
+        log_info "  Still waiting... ($waited seconds)"
+    done
+
+    if [[ $waited -ge $max_wait ]]; then
+        log_warn "CloudStack may not be fully ready. Please check manually."
+    fi
+
+    CLOUDSTACK_URL="http://$SERVER_IP:8080/client"
+    log_info "CloudStack Simulator deployed at: $CLOUDSTACK_URL"
+}
+
+create_cloudstack_user() {
+    log_step "Creating CloudStack Admin User for StackBill"
+
+    # CloudStack default credentials
+    local CS_HOST="http://localhost:8080/client/api"
+    local CS_ADMIN_USER="admin"
+    local CS_ADMIN_PASS="password"
+
+    # Generate credentials for new user
+    CLOUDSTACK_ADMIN_USER="sb-admin@${DOMAIN}"
+    CLOUDSTACK_ADMIN_PASSWORD=$(generate_password)
+
+    log_info "Creating user: $CLOUDSTACK_ADMIN_USER"
+
+    # Login and get session key
+    local login_response=$(curl -s -c /tmp/cs_cookies.txt \
+        "${CS_HOST}?command=login&username=${CS_ADMIN_USER}&password=${CS_ADMIN_PASS}&response=json")
+
+    local sessionkey=$(echo "$login_response" | grep -o '"sessionkey":"[^"]*"' | cut -d'"' -f4)
+
+    if [[ -z "$sessionkey" ]]; then
+        log_error "Failed to login to CloudStack. Please create user manually."
+        log_info "Default CloudStack credentials: admin / password"
+        return 1
+    fi
+
+    # Get the ROOT domain ID
+    local domain_response=$(curl -s -b /tmp/cs_cookies.txt \
+        "${CS_HOST}?command=listDomains&name=ROOT&response=json&sessionkey=${sessionkey}")
+    local domain_id=$(echo "$domain_response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+    if [[ -z "$domain_id" ]]; then
+        log_warn "Could not find ROOT domain, using default"
+        domain_id="1"
+    fi
+
+    # Get the admin account ID
+    local account_response=$(curl -s -b /tmp/cs_cookies.txt \
+        "${CS_HOST}?command=listAccounts&name=admin&domainid=${domain_id}&response=json&sessionkey=${sessionkey}")
+    local account_id=$(echo "$account_response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+    # URL encode the username and email
+    local encoded_username=$(echo -n "$CLOUDSTACK_ADMIN_USER" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
+    local encoded_email=$(echo -n "$EMAIL" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
+    local encoded_password=$(echo -n "$CLOUDSTACK_ADMIN_PASSWORD" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
+
+    # Create user
+    log_info "Creating user in CloudStack..."
+    local create_response=$(curl -s -b /tmp/cs_cookies.txt \
+        "${CS_HOST}?command=createUser&username=${encoded_username}&password=${encoded_password}&firstname=StackBill&lastname=Admin&email=${encoded_email}&account=admin&domainid=${domain_id}&response=json&sessionkey=${sessionkey}")
+
+    local user_id=$(echo "$create_response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+    if [[ -z "$user_id" ]]; then
+        # User might already exist, try to find it
+        log_warn "User creation response: $create_response"
+        local users_response=$(curl -s -b /tmp/cs_cookies.txt \
+            "${CS_HOST}?command=listUsers&username=${encoded_username}&response=json&sessionkey=${sessionkey}")
+        user_id=$(echo "$users_response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    fi
+
+    if [[ -z "$user_id" ]]; then
+        log_error "Failed to create or find user. Please create manually."
+        rm -f /tmp/cs_cookies.txt
+        return 1
+    fi
+
+    log_info "User ID: $user_id"
+
+    # Enable user (if not already enabled)
+    log_info "Enabling user..."
+    curl -s -b /tmp/cs_cookies.txt \
+        "${CS_HOST}?command=enableUser&id=${user_id}&response=json&sessionkey=${sessionkey}" > /dev/null
+
+    # Register user keys (API key and secret key)
+    log_info "Registering API keys..."
+    local keys_response=$(curl -s -b /tmp/cs_cookies.txt \
+        "${CS_HOST}?command=registerUserKeys&id=${user_id}&response=json&sessionkey=${sessionkey}")
+
+    CLOUDSTACK_API_KEY=$(echo "$keys_response" | grep -o '"apikey":"[^"]*"' | cut -d'"' -f4)
+    CLOUDSTACK_SECRET_KEY=$(echo "$keys_response" | grep -o '"secretkey":"[^"]*"' | cut -d'"' -f4)
+
+    if [[ -z "$CLOUDSTACK_API_KEY" || -z "$CLOUDSTACK_SECRET_KEY" ]]; then
+        log_warn "Could not retrieve API keys. Keys response: $keys_response"
+        log_info "You may need to generate keys manually from CloudStack UI"
+    else
+        log_info "API keys generated successfully!"
+    fi
+
+    # Cleanup
+    rm -f /tmp/cs_cookies.txt
+
+    log_info "CloudStack user '$CLOUDSTACK_ADMIN_USER' created and configured"
+}
+
+# ============================================
 # DEPLOY STACKBILL DIRECTLY FROM ECR
 # ============================================
 
@@ -951,6 +1187,25 @@ NFS:
   Server: $SERVER_IP
   Path: /data/stackbill
 
+EOF
+
+    # Add CloudStack section based on mode
+    if [[ "$CLOUDSTACK_MODE" == "simulator" ]]; then
+        cat >> "$CREDENTIALS_FILE" <<EOF
+CLOUDSTACK SIMULATOR:
+  URL: $CLOUDSTACK_URL
+  Default Admin: admin / password
+
+  StackBill User:
+    Username: $CLOUDSTACK_ADMIN_USER
+    Password: $CLOUDSTACK_ADMIN_PASSWORD
+    API Key: ${CLOUDSTACK_API_KEY:-"(generate from CloudStack UI)"}
+    Secret Key: ${CLOUDSTACK_SECRET_KEY:-"(generate from CloudStack UI)"}
+
+EOF
+    fi
+
+    cat >> "$CREDENTIALS_FILE" <<EOF
 ================================================================================
 EOF
     chmod 600 "$CREDENTIALS_FILE"
@@ -979,18 +1234,57 @@ print_summary() {
     echo "  Open the following ports in your firewall/security group:"
     echo "  - TCP $HTTP_NODEPORT  (HTTP)"
     echo "  - TCP $HTTPS_NODEPORT  (HTTPS)"
+    if [[ "$CLOUDSTACK_MODE" == "simulator" ]]; then
+        echo "  - TCP 8080  (CloudStack Simulator)"
+    fi
     echo ""
     echo -e "${CYAN}SERVICE CREDENTIALS:${NC}"
     echo "  MySQL:    stackbill / $MYSQL_PASSWORD"
     echo "  MongoDB:  stackbill / $MONGODB_PASSWORD"
     echo "  RabbitMQ: stackbill / $RABBITMQ_PASSWORD"
     echo ""
+
+    # CloudStack section
+    if [[ "$CLOUDSTACK_MODE" == "simulator" ]]; then
+        echo -e "${CYAN}CLOUDSTACK SIMULATOR:${NC}"
+        echo "  URL: $CLOUDSTACK_URL"
+        echo "  Default Admin: admin / password"
+        echo ""
+        echo -e "${CYAN}STACKBILL CLOUDSTACK USER:${NC}"
+        echo "  Username: $CLOUDSTACK_ADMIN_USER"
+        echo "  Password: $CLOUDSTACK_ADMIN_PASSWORD"
+        if [[ -n "$CLOUDSTACK_API_KEY" ]]; then
+            echo "  API Key: $CLOUDSTACK_API_KEY"
+            echo "  Secret Key: $CLOUDSTACK_SECRET_KEY"
+        else
+            echo "  API Keys: Generate from CloudStack UI"
+        fi
+        echo ""
+    fi
+
+    echo -e "${CYAN}NEXT STEPS - CONFIGURE STACKBILL:${NC}"
+    if [[ "$CLOUDSTACK_MODE" == "existing" ]]; then
+        echo "  1. Integrate CloudStack with StackBill:"
+        echo "     https://docs.stackbill.com/docs/deployment/integrating-stackbill-with-cloudstack"
+        echo ""
+    else
+        echo "  1. CloudStack Simulator is ready at: $CLOUDSTACK_URL"
+        echo "     Use the StackBill user credentials above to integrate."
+        echo ""
+    fi
+    echo "  2. Complete StackBill configuration:"
+    echo "     https://docs.stackbill.com/docs/deployment/configuring-stackbill"
+    echo ""
+
     echo -e "${YELLOW}Credentials saved to: /root/stackbill-credentials.txt${NC}"
     echo ""
     echo -e "${CYAN}USEFUL COMMANDS:${NC}"
     echo "  kubectl get pods -n $STACKBILL_NAMESPACE"
     echo "  kubectl logs -f <pod-name> -n $STACKBILL_NAMESPACE"
     echo "  cat /root/stackbill-credentials.txt"
+    if [[ "$CLOUDSTACK_MODE" == "simulator" ]]; then
+        echo "  podman logs cloudstack-simulator"
+    fi
     echo ""
 }
 
@@ -1013,14 +1307,15 @@ main() {
     echo -e "${CYAN}  Configuration Summary${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo "  Domain:     $DOMAIN"
-    echo "  SSL Mode:   $SSL_MODE"
+    echo "  Domain:       $DOMAIN"
+    echo "  SSL Mode:     $SSL_MODE"
     if [[ "$SSL_MODE" == "letsencrypt" ]]; then
-        echo "  Email:      $EMAIL"
+        echo "  Email:        $EMAIL"
     else
-        echo "  SSL Cert:   $SSL_CERT"
-        echo "  SSL Key:    $SSL_KEY"
+        echo "  SSL Cert:     $SSL_CERT"
+        echo "  SSL Key:      $SSL_KEY"
     fi
+    echo "  CloudStack:   $CLOUDSTACK_MODE"
     echo ""
     echo -n "Proceed with installation? [Y/n]: "
     read confirm < /dev/tty
@@ -1067,6 +1362,13 @@ main() {
     deploy_stackbill
     setup_istio_gateway
     wait_for_pods
+
+    # CloudStack Simulator (if selected)
+    if [[ "$CLOUDSTACK_MODE" == "simulator" ]]; then
+        install_podman
+        install_cloudstack_simulator
+        create_cloudstack_user
+    fi
 
     # Save and summarize
     save_credentials

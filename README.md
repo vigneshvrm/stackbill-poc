@@ -7,7 +7,8 @@ Fully automated single-command deployment for StackBill Cloud Management Portal.
 This installer provides a **completely automated POC installation**:
 
 - **User provides**: Domain name + SSL certificate + ECR token
-- **Auto-provisioned**: K3s, Istio, MySQL, MongoDB, RabbitMQ, NFS storage, StackBill
+- **Auto-provisioned**: K3s, Istio, MariaDB, MongoDB, RabbitMQ, NFS storage, StackBill
+- **Optional**: CloudStack Simulator for POC/testing environments
 
 **No UI wizard required** - everything is configured automatically.
 
@@ -57,12 +58,16 @@ The installer requires:
 3. **SSL Certificate** - Choose one:
    - **Let's Encrypt** (recommended) - Free, automatic certificate
    - **Custom Certificate** - Provide your own fullchain.pem and privatekey.pem
+4. **CloudStack** - Choose one:
+   - **Existing CloudStack** - Use your own CloudStack deployment
+   - **CloudStack Simulator** - Deploy Apache CloudStack Simulator for POC/testing
 
 The script will then install everything automatically:
 - K3s Kubernetes cluster
 - Istio service mesh
-- MySQL, MongoDB, RabbitMQ databases
+- MariaDB, MongoDB, RabbitMQ databases
 - StackBill application
+- CloudStack Simulator (if selected)
 
 ## What Gets Installed
 
@@ -75,6 +80,7 @@ The script will then install everything automatically:
 | RabbitMQ | 3.13 | Host (systemd) |
 | NFS | - | Host (/data/stackbill) |
 | StackBill | 4.6.7 | Kubernetes (sb-apps namespace) |
+| CloudStack Simulator | 4.x | Podman container (optional) |
 
 ## Command Line Options
 
@@ -87,6 +93,8 @@ Run without arguments for interactive mode, or use these options for non-interac
 | `--email` | Email for Let's Encrypt certificate notifications |
 | `--ssl-cert` | Path to custom SSL certificate (fullchain.pem) |
 | `--ssl-key` | Path to custom SSL private key (privatekey.pem) |
+| `--cloudstack-existing` | Use existing CloudStack deployment |
+| `--cloudstack-simulator` | Deploy CloudStack Simulator for POC/testing |
 | `--skip-infra` | Skip K3s/Istio installation |
 | `--skip-db` | Skip database installation |
 
@@ -99,17 +107,19 @@ export AWS_ECR_TOKEN="$(aws ecr get-login-password --region ap-south-1)"
 # Interactive mode (recommended)
 sudo -E ./scripts/install-stackbill-poc.sh
 
-# With Let's Encrypt SSL
+# With Let's Encrypt SSL and CloudStack Simulator
 sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --letsencrypt \
-    --email admin@example.com
+    --email admin@example.com \
+    --cloudstack-simulator
 
-# With custom certificate
+# With custom certificate and existing CloudStack
 sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --ssl-cert /path/to/fullchain.pem \
-    --ssl-key /path/to/privatekey.pem
+    --ssl-key /path/to/privatekey.pem \
+    --cloudstack-existing
 ```
 
 ## Post-Installation
@@ -122,6 +132,21 @@ sudo -E ./scripts/install-stackbill-poc.sh \
 If DNS is not configured, use direct IP access:
 - HTTP: `http://<server-ip>:31080`
 - HTTPS: `https://<server-ip>:31443`
+
+### Configure CloudStack Integration
+
+After installation, configure StackBill to connect to CloudStack:
+
+1. **If using CloudStack Simulator**:
+   - Access CloudStack UI: `http://<server-ip>:8080/client`
+   - Default admin: `admin` / `password`
+   - StackBill user credentials are in `/root/stackbill-credentials.txt`
+
+2. **Configure StackBill with CloudStack**:
+   - Follow: https://docs.stackbill.com/docs/deployment/integrating-stackbill-with-cloudstack
+
+3. **Complete StackBill Setup**:
+   - Follow: https://docs.stackbill.com/docs/deployment/configuring-stackbill
 
 ### View Credentials
 
@@ -179,6 +204,23 @@ rabbitmqctl status
 ```bash
 kubectl get gateway -n sb-apps
 kubectl get virtualservice -n sb-apps
+```
+
+### CloudStack Simulator issues
+
+```bash
+# Check container status
+podman ps -a | grep cloudstack
+
+# View logs
+podman logs cloudstack-simulator
+
+# Restart simulator
+podman restart cloudstack-simulator
+
+# Access CloudStack UI
+# http://<server-ip>:8080/client
+# Default: admin / password
 ```
 
 ## Project Structure
