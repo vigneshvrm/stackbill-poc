@@ -25,42 +25,25 @@ This installer provides a **completely automated POC installation**:
 
 ## Quick Start
 
-### Step 1: Get ECR Token
-
-You need an AWS ECR token to pull StackBill images. Get it using AWS CLI:
+### Run the Installer
 
 ```bash
-aws ecr get-login-password --region ap-south-1
-```
-
-### Step 2: Run Installer
-
-```bash
-# Set the ECR token
-export AWS_ECR_TOKEN="<your-ecr-token>"
-
-# Clone and install
+# Clone and install (fully interactive)
 git clone https://github.com/vigneshvrm/stackbill-poc.git
 cd stackbill-poc
-sudo -E ./scripts/install-stackbill-poc.sh
+sudo ./scripts/install-stackbill-poc.sh
 ```
 
-Or one-liner (if you already have the token):
-
-```bash
-export AWS_ECR_TOKEN="<your-ecr-token>"
-curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh | sudo -E bash
-```
-
-The installer requires:
-1. **AWS_ECR_TOKEN** - Environment variable with ECR authentication token
-2. **Domain name** - Your StackBill portal domain (e.g., `stackbill.example.com`)
-3. **SSL Certificate** - Choose one:
+The installer will prompt you for:
+1. **Domain name** - Your StackBill portal domain (e.g., `stackbill.example.com`)
+2. **SSL Certificate** - Choose one:
    - **Let's Encrypt** (recommended) - Free, automatic certificate
    - **Custom Certificate** - Provide your own fullchain.pem and privatekey.pem
-4. **CloudStack** - Choose one:
+3. **CloudStack** - Choose one:
    - **Existing CloudStack** - Use your own CloudStack deployment
    - **CloudStack Simulator** - Deploy Apache CloudStack Simulator for POC/testing
+4. **AWS ECR Token** - Required for pulling StackBill images
+   - Get it with: `aws ecr get-login-password --region ap-south-1`
 
 The script will then install everything automatically:
 - K3s Kubernetes cluster
@@ -101,20 +84,17 @@ Run without arguments for interactive mode, or use these options for non-interac
 ### Examples
 
 ```bash
-# First, set the ECR token
-export AWS_ECR_TOKEN="$(aws ecr get-login-password --region ap-south-1)"
+# Fully interactive mode (recommended)
+sudo ./scripts/install-stackbill-poc.sh
 
-# Interactive mode (recommended)
-sudo -E ./scripts/install-stackbill-poc.sh
-
-# With Let's Encrypt SSL (CloudStack will be prompted)
-sudo -E ./scripts/install-stackbill-poc.sh \
+# With Let's Encrypt SSL (CloudStack and ECR token will be prompted)
+sudo ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --letsencrypt \
     --email admin@example.com
 
-# With custom certificate (CloudStack will be prompted)
-sudo -E ./scripts/install-stackbill-poc.sh \
+# With custom certificate (CloudStack and ECR token will be prompted)
+sudo ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --ssl-cert /path/to/fullchain.pem \
     --ssl-key /path/to/privatekey.pem

@@ -81,12 +81,11 @@ print_banner() {
     echo "║    • StackBill Cloud Management Platform                      ║"
     echo "║    • CloudStack Simulator (optional, for POC)                 ║"
     echo "║                                                               ║"
-    echo "║  SSL Options:                                                 ║"
-    echo "║    • Let's Encrypt (free, automatic)                          ║"
-    echo "║    • Custom certificate (bring your own)                      ║"
-    echo "║                                                               ║"
-    echo "║  Requirements:                                                ║"
-    echo "║    • AWS_ECR_TOKEN environment variable                       ║"
+    echo "║  You will be prompted for:                                    ║"
+    echo "║    • Domain name                                              ║"
+    echo "║    • SSL certificate (Let's Encrypt or custom)                ║"
+    echo "║    • CloudStack configuration                                 ║"
+    echo "║    • AWS ECR token (for pulling images)                       ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -300,6 +299,42 @@ prompt_cloudstack_option() {
     done
 }
 
+prompt_ecr_token() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  STEP 4: AWS ECR Token${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "An AWS ECR token is required to pull StackBill images."
+    echo ""
+    echo "To get a token, run this command on a machine with AWS CLI configured:"
+    echo -e "  ${GREEN}aws ecr get-login-password --region ap-south-1${NC}"
+    echo ""
+    echo "The token is a long base64 string (usually 1000+ characters)."
+    echo ""
+
+    while [[ -z "$AWS_ECR_TOKEN" ]]; do
+        echo -n "Paste your ECR token: "
+        read -s AWS_ECR_TOKEN < /dev/tty
+        echo ""
+
+        if [[ -z "$AWS_ECR_TOKEN" ]]; then
+            echo -e "${RED}ECR token cannot be empty. Please try again.${NC}"
+        elif [[ ${#AWS_ECR_TOKEN} -lt 100 ]]; then
+            echo -e "${YELLOW}Warning: Token seems too short (${#AWS_ECR_TOKEN} chars). ECR tokens are usually 1000+ characters.${NC}"
+            echo -n "Continue with this token? [y/N]: "
+            read confirm < /dev/tty
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                AWS_ECR_TOKEN=""
+            fi
+        fi
+    done
+
+    export AWS_ECR_TOKEN
+    echo ""
+    log_info "ECR Token: provided (${#AWS_ECR_TOKEN} chars)"
+}
+
 run_interactive_setup() {
     # Only run interactive setup if domain is not already set via args
     if [[ -z "$DOMAIN" ]]; then
@@ -320,6 +355,11 @@ run_interactive_setup() {
     # CloudStack configuration
     if [[ -z "$CLOUDSTACK_MODE" ]]; then
         prompt_cloudstack_option
+    fi
+
+    # ECR token - prompt if not provided via environment variable
+    if [[ -z "$AWS_ECR_TOKEN" ]]; then
+        prompt_ecr_token
     fi
 }
 
@@ -344,15 +384,10 @@ show_help() {
     echo "StackBill POC Installer"
     echo ""
     echo "Usage:"
-    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0                    # Interactive mode (recommended)"
-    echo "  sudo -E $0 [OPTIONS]          # Non-interactive mode"
+    echo "  sudo $0                       # Fully interactive mode (recommended)"
+    echo "  sudo $0 [OPTIONS]             # Semi-interactive mode"
     echo ""
-    echo "Prerequisites:"
-    echo "  AWS_ECR_TOKEN environment variable must be set."
-    echo "  Get the token with: aws ecr get-login-password --region ap-south-1"
-    echo ""
-    echo "Interactive Mode:"
+    echo "Interactive Mode (recommended):"
     echo "  Run without arguments to be guided through the setup:"
     echo "    1. Enter your domain name"
     echo "    2. Choose SSL option:"
@@ -361,8 +396,12 @@ show_help() {
     echo "    3. Choose CloudStack option:"
     echo "       - Use existing CloudStack deployment"
     echo "       - Deploy CloudStack Simulator for POC/testing"
+    echo "    4. Enter AWS ECR token (for pulling StackBill images)"
     echo ""
-    echo "Non-Interactive Options:"
+    echo "  To get an ECR token, run on a machine with AWS CLI:"
+    echo "    aws ecr get-login-password --region ap-south-1"
+    echo ""
+    echo "Command Line Options (optional):"
     echo "  --domain       Domain name for StackBill (e.g., stackbill.example.com)"
     echo "  --ssl-cert     Path to SSL certificate file (fullchain.pem)"
     echo "  --ssl-key      Path to SSL private key file (privatekey.pem)"
@@ -372,20 +411,18 @@ show_help() {
     echo "  --skip-db      Skip database installation (use existing databases)"
     echo "  -h, --help     Show this help message"
     echo ""
-    echo "Note: CloudStack configuration is always prompted interactively."
+    echo "Note: CloudStack and ECR token are always prompted interactively."
+    echo "      You can also set AWS_ECR_TOKEN environment variable before running."
     echo ""
     echo "Examples:"
-    echo "  # Interactive (recommended)"
-    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0"
+    echo "  # Fully interactive (recommended)"
+    echo "  sudo $0"
     echo ""
-    echo "  # With custom certificate (CloudStack will be prompted)"
-    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo "  # With custom certificate (CloudStack and ECR token will be prompted)"
+    echo "  sudo $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
     echo ""
-    echo "  # With Let's Encrypt (CloudStack will be prompted)"
-    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com"
+    echo "  # With Let's Encrypt (CloudStack and ECR token will be prompted)"
+    echo "  sudo $0 --domain example.com --letsencrypt --email admin@example.com"
 }
 
 validate_inputs() {
@@ -398,16 +435,9 @@ validate_inputs() {
     fi
     log_info "  Running as root: yes"
 
-    # Check for AWS_ECR_TOKEN
+    # Check for AWS_ECR_TOKEN (should have been provided via env or interactive prompt)
     if [[ -z "$AWS_ECR_TOKEN" ]]; then
-        log_error "AWS_ECR_TOKEN environment variable is required"
-        echo ""
-        echo "To get an ECR token, run:"
-        echo "  aws ecr get-login-password --region ap-south-1"
-        echo ""
-        echo "Then run the installer with:"
-        echo "  export AWS_ECR_TOKEN=\"<your-token>\""
-        echo "  sudo -E $0 [options]"
+        log_error "AWS_ECR_TOKEN is required but not provided"
         exit 1
     fi
     log_info "  AWS ECR Token: provided (${#AWS_ECR_TOKEN} chars)"
@@ -1314,6 +1344,7 @@ main() {
         echo "  SSL Key:      $SSL_KEY"
     fi
     echo "  CloudStack:   $CLOUDSTACK_MODE"
+    echo "  ECR Token:    provided (${#AWS_ECR_TOKEN} chars)"
     echo ""
     echo -n "Proceed with installation? [Y/n]: "
     read confirm < /dev/tty
