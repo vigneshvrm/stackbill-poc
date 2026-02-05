@@ -864,24 +864,19 @@ install_podman() {
 
     if command -v podman &>/dev/null; then
         log_info "Podman already installed: $(podman --version)"
-        return 0
+    else
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq
+        apt-get install -y -qq podman
     fi
 
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq podman-docker
-
-    # Configure Podman to allow pulling from Docker Hub
+    # Configure Podman to allow pulling from Docker Hub (new TOML format)
     mkdir -p /etc/containers
     cat > /etc/containers/registries.conf <<'EOF'
-[registries.search]
-registries = ['docker.io']
+unqualified-search-registries = ["docker.io"]
 
-[registries.insecure]
-registries = []
-
-[registries.block]
-registries = []
+[[registry]]
+location = "docker.io"
 EOF
 
     log_info "Podman installed and configured for Docker Hub"
@@ -901,13 +896,13 @@ install_cloudstack_simulator() {
     podman rm -f cloudstack-simulator 2>/dev/null || true
 
     log_info "Pulling CloudStack Simulator image..."
-    podman pull apache/cloudstack-simulator
+    podman pull docker.io/apache/cloudstack-simulator
 
     log_info "Starting CloudStack Simulator container..."
     podman run --name cloudstack-simulator \
         -p 8080:5050 \
         -d \
-        apache/cloudstack-simulator
+        docker.io/apache/cloudstack-simulator
 
     log_info "Waiting 30 seconds for CloudStack to initialize..."
     sleep 30
