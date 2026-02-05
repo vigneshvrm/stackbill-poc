@@ -131,33 +131,50 @@ delete_host_databases() {
     log_info "Fixing any broken packages..."
     dpkg --configure -a 2>/dev/null || true
 
-    # ==================== MariaDB ====================
-    log_info "Removing MariaDB..."
+    # ==================== MariaDB / MySQL ====================
+    log_info "Removing MariaDB/MySQL..."
 
-    # Stop MariaDB if running
+    # Stop MariaDB/MySQL if running
     systemctl stop mariadb 2>/dev/null || true
+    systemctl stop mysql 2>/dev/null || true
     systemctl disable mariadb 2>/dev/null || true
+    systemctl disable mysql 2>/dev/null || true
 
-    # Remove and purge all MariaDB packages
+    # Kill any remaining mysql processes
+    pkill -9 mysqld 2>/dev/null || true
+    pkill -9 mariadbd 2>/dev/null || true
+
+    # Remove and purge all MariaDB and MySQL packages
     apt-get remove --purge -y \
         mariadb-server \
         mariadb-client \
         mariadb-common \
-        mariadb-server-core \
-        mariadb-client-core \
+        mariadb-server-core-* \
+        mariadb-client-core-* \
+        mysql-server \
+        mysql-client \
+        mysql-common \
+        mysql-server-core-* \
+        mysql-client-core-* \
         2>/dev/null || true
 
-    # Clean up MariaDB directories and config
+    # Clean up MariaDB/MySQL directories and config
     rm -rf /etc/mysql
     rm -rf /var/lib/mysql
     rm -rf /var/log/mysql
     rm -rf /var/run/mysqld
+    rm -rf /var/lib/mysql-files
+    rm -rf /var/lib/mysql-keyring
 
     # Clean up alternatives
     rm -f /etc/alternatives/my.cnf
     update-alternatives --remove-all my.cnf 2>/dev/null || true
 
-    log_info "MariaDB removed"
+    # Remove mysql user/group if exists
+    userdel mysql 2>/dev/null || true
+    groupdel mysql 2>/dev/null || true
+
+    log_info "MariaDB/MySQL removed"
 
     # ==================== MongoDB ====================
     log_info "Removing MongoDB..."
@@ -208,6 +225,17 @@ delete_host_databases() {
     rm -rf /etc/rabbitmq
 
     log_info "RabbitMQ removed"
+
+    # ==================== CloudStack Simulator ====================
+    if command -v podman &>/dev/null; then
+        if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "cloudstack-simulator"; then
+            log_info "Removing CloudStack Simulator..."
+            podman stop cloudstack-simulator 2>/dev/null || true
+            podman rm -f cloudstack-simulator 2>/dev/null || true
+            podman rmi docker.io/apache/cloudstack-simulator 2>/dev/null || true
+            log_info "CloudStack Simulator removed"
+        fi
+    fi
 
     # ==================== NFS ====================
     if [[ -d /data/stackbill ]]; then
