@@ -46,7 +46,6 @@ The installer will prompt you for:
    - **Custom Certificate** - Provide your own fullchain.pem and privatekey.pem
 
 That's it! The script will install everything automatically:
-- Docker (for secure ECR token fetch)
 - K3s Kubernetes cluster
 - Istio service mesh
 - MySQL, MongoDB, RabbitMQ databases
@@ -56,7 +55,6 @@ That's it! The script will install everything automatically:
 
 | Component | Version | Location |
 |-----------|---------|----------|
-| Docker | Latest | Container runtime |
 | K3s | v1.29.0 | Kubernetes cluster |
 | Istio | 1.20.3 | Service mesh |
 | MySQL | 8.0 | Host (systemd) |

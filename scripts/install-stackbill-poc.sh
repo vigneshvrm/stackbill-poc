@@ -385,77 +385,71 @@ get_server_ip() {
 }
 
 # ============================================
-# ECR TOKEN FETCH (Container-Based)
+# ECR TOKEN FETCH (AWS CLI Method)
 # ============================================
 
-install_docker() {
-    if command -v docker &>/dev/null; then
-        log_info "Docker already installed"
+install_aws_cli() {
+    log_step "Installing AWS CLI"
+
+    if command -v aws &>/dev/null; then
+        log_info "AWS CLI already installed: $(aws --version 2>&1 | head -1)"
         return 0
     fi
 
-    log_info "Installing Docker for secure token fetch..."
-    curl -fsSL https://get.docker.com | sh
-    systemctl start docker
-    systemctl enable docker
-    log_info "Docker installed"
+    # Install unzip if not present
+    if ! command -v unzip &>/dev/null; then
+        log_info "Installing unzip..."
+        apt-get update -qq
+        apt-get install -y -qq unzip
+    fi
+
+    log_info "Downloading AWS CLI..."
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+
+    log_info "Installing AWS CLI..."
+    unzip -q /tmp/awscliv2.zip -d /tmp
+    /tmp/aws/install --update
+
+    # Cleanup
+    rm -rf /tmp/aws /tmp/awscliv2.zip
+
+    log_info "AWS CLI installed: $(aws --version 2>&1 | head -1)"
 }
 
 fetch_ecr_token() {
-    log_step "Fetching ECR Authentication Token (Secure Container Method)"
+    log_step "Fetching ECR Authentication Token"
 
-    # Install Docker if needed
-    install_docker
+    # Install AWS CLI if needed
+    install_aws_cli
 
-    # Create temporary directory for container build
-    local tmp_dir=$(mktemp -d)
-    local container_name="ecr-token-fetch-$$"
-    local image_name="ecr-token-fetcher:temp"
-
-    log_info "Building ephemeral token fetcher container..."
-
-    # Create Dockerfile with AWS CLI
-    cat > "$tmp_dir/Dockerfile" <<'DOCKERFILE'
-FROM amazon/aws-cli:latest
-ENTRYPOINT ["aws", "ecr", "get-login-password", "--region"]
-DOCKERFILE
-
-    # Build the container
-    docker build -t "$image_name" "$tmp_dir" -q >/dev/null 2>&1
-
-    # Decrypt credentials and run container to get token
+    # Decrypt credentials
     local _p="sb-ecr-2024-poc-install"
     local _ak=$(echo "$_EK1" | openssl enc -aes-256-cbc -d -a -pbkdf2 -iter 100000 -pass pass:$_p 2>/dev/null)
     local _sk=$(echo "$_EK2" | openssl enc -aes-256-cbc -d -a -pbkdf2 -iter 100000 -pass pass:$_p 2>/dev/null)
 
     if [[ -z "$_ak" || -z "$_sk" ]]; then
-        log_error "Failed to initialize ECR credentials"
-        rm -rf "$tmp_dir"
+        log_error "Failed to decrypt ECR credentials"
         exit 1
     fi
 
-    log_info "Fetching ECR token via container..."
+    log_info "Authenticating with AWS ECR..."
 
-    # Run container to get token (credentials only exist in container memory)
+    # Set credentials temporarily for AWS CLI
+    export AWS_ACCESS_KEY_ID="$_ak"
+    export AWS_SECRET_ACCESS_KEY="$_sk"
+    export AWS_DEFAULT_REGION="$ECR_REGION"
+
+    # Fetch ECR token
     set +e
-    AWS_ECR_TOKEN=$(docker run --rm \
-        -e AWS_ACCESS_KEY_ID="$_ak" \
-        -e AWS_SECRET_ACCESS_KEY="$_sk" \
-        --name "$container_name" \
-        "$image_name" \
-        "$ECR_REGION" 2>&1)
+    AWS_ECR_TOKEN=$(aws ecr get-login-password --region "$ECR_REGION" 2>&1)
     local exit_code=$?
     set -e
 
-    # Immediately clear variables
+    # Immediately clear credentials from environment
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION
     _ak=""
     _sk=""
     unset _ak _sk _p
-
-    # Clean up container and image
-    log_info "Cleaning up container artifacts..."
-    docker rmi "$image_name" -f >/dev/null 2>&1 || true
-    rm -rf "$tmp_dir"
 
     # Verify token was retrieved
     if [[ $exit_code -ne 0 ]] || [[ -z "$AWS_ECR_TOKEN" ]] || [[ "$AWS_ECR_TOKEN" == *"error"* ]] || [[ "$AWS_ECR_TOKEN" == *"Error"* ]]; then
@@ -465,7 +459,6 @@ DOCKERFILE
     fi
 
     log_info "ECR token fetched successfully (length: ${#AWS_ECR_TOKEN} characters)"
-    log_info "Container and credentials cleaned up - no trace remains"
 }
 
 # ============================================
