@@ -138,14 +138,16 @@ prompt_domain() {
     echo ""
 
     while [[ -z "$DOMAIN" ]]; do
-        read -p "Domain name: " DOMAIN
+        echo -n "Domain name: "
+        read DOMAIN < /dev/tty
 
         # Basic validation
         if [[ -z "$DOMAIN" ]]; then
             echo -e "${RED}Domain name cannot be empty. Please try again.${NC}"
         elif [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
             echo -e "${YELLOW}Warning: '$DOMAIN' may not be a valid domain format.${NC}"
-            read -p "Continue with this domain? [y/N]: " confirm
+            echo -n "Continue with this domain? [y/N]: "
+            read confirm < /dev/tty
             if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
                 DOMAIN=""
             fi
@@ -172,7 +174,8 @@ prompt_ssl_option() {
     echo ""
 
     while [[ -z "$SSL_MODE" ]]; do
-        read -p "Select option [1 or 2]: " ssl_choice
+        echo -n "Select option [1 or 2]: "
+        read ssl_choice < /dev/tty
 
         case $ssl_choice in
             1)
@@ -196,13 +199,15 @@ prompt_letsencrypt_email() {
     echo ""
 
     while [[ -z "$EMAIL" ]]; do
-        read -p "Email address: " EMAIL
+        echo -n "Email address: "
+        read EMAIL < /dev/tty
 
         if [[ -z "$EMAIL" ]]; then
             echo -e "${RED}Email cannot be empty for Let's Encrypt.${NC}"
         elif [[ ! "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
             echo -e "${YELLOW}Warning: '$EMAIL' may not be a valid email format.${NC}"
-            read -p "Continue with this email? [y/N]: " confirm
+            echo -n "Continue with this email? [y/N]: "
+            read confirm < /dev/tty
             if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
                 EMAIL=""
             fi
@@ -221,7 +226,8 @@ prompt_custom_certificates() {
 
     # Get certificate path
     while [[ -z "$SSL_CERT" || ! -f "$SSL_CERT" ]]; do
-        read -p "Path to SSL certificate (fullchain.pem): " SSL_CERT
+        echo -n "Path to SSL certificate (fullchain.pem): "
+        read SSL_CERT < /dev/tty
 
         if [[ -z "$SSL_CERT" ]]; then
             echo -e "${RED}Path cannot be empty.${NC}"
@@ -233,7 +239,8 @@ prompt_custom_certificates() {
 
     # Get private key path
     while [[ -z "$SSL_KEY" || ! -f "$SSL_KEY" ]]; do
-        read -p "Path to private key (privatekey.pem): " SSL_KEY
+        echo -n "Path to private key (privatekey.pem): "
+        read SSL_KEY < /dev/tty
 
         if [[ -z "$SSL_KEY" ]]; then
             echo -e "${RED}Path cannot be empty.${NC}"
@@ -1074,7 +1081,8 @@ main() {
         echo "  SSL Key:    $SSL_KEY"
     fi
     echo ""
-    read -p "Proceed with installation? [Y/n]: " confirm
+    echo -n "Proceed with installation? [Y/n]: "
+    read confirm < /dev/tty
     if [[ "$confirm" =~ ^[Nn]$ ]]; then
         log_info "Installation cancelled."
         exit 0
