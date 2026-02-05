@@ -6,12 +6,12 @@
 # Interactive mode: prompts for domain and SSL configuration
 #
 # Usage:
-#   sudo ./install-stackbill-poc.sh
+#   export AWS_ECR_TOKEN="your-ecr-token"
+#   sudo -E ./install-stackbill-poc.sh
 #
-# One-liner:
-#   curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh | sudo bash
+# Get ECR token with:
+#   aws ecr get-login-password --region ap-south-1
 #
-# ECR authentication is handled automatically via secure token fetch.
 # ============================================
 
 set -e
@@ -32,11 +32,6 @@ ISTIO_VERSION="1.20.3"
 STACKBILL_CHART="oci://public.ecr.aws/p0g2c5k8/stackbill"
 ECR_REGISTRY="730335576030.dkr.ecr.ap-south-1.amazonaws.com"
 ECR_REGION="ap-south-1"
-
-# Encrypted ECR Credentials (AES-256-CBC, PBKDF2 with 100k iterations)
-# These are pull-only credentials - can only read from ECR, not write/delete
-_EK1="U2FsdGVkX1/SDUAMN8jY/1UCaCuZKwIVDZME0Y4/VS8qaSNiq/e/fl1fSz9O9R9h"
-_EK2="U2FsdGVkX1/Y/wF1gsFA/bA2iKXpJ/inJOCKBogLL1JyEGU4OCDMfpyfnZJCixegDSx6SzxAiPs+IV+pYRU2Dg=="
 
 # User inputs
 DOMAIN=""
@@ -81,7 +76,8 @@ print_banner() {
     echo "║    • Let's Encrypt (free, automatic)                          ║"
     echo "║    • Custom certificate (bring your own)                      ║"
     echo "║                                                               ║"
-    echo "║  ECR authentication is handled automatically                  ║"
+    echo "║  Requirements:                                                ║"
+    echo "║    • AWS_ECR_TOKEN environment variable                       ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -298,8 +294,13 @@ show_help() {
     echo "StackBill POC Installer"
     echo ""
     echo "Usage:"
-    echo "  sudo $0                       # Interactive mode (recommended)"
-    echo "  sudo $0 [OPTIONS]             # Non-interactive mode"
+    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
+    echo "  sudo -E $0                    # Interactive mode (recommended)"
+    echo "  sudo -E $0 [OPTIONS]          # Non-interactive mode"
+    echo ""
+    echo "Prerequisites:"
+    echo "  AWS_ECR_TOKEN environment variable must be set."
+    echo "  Get the token with: aws ecr get-login-password --region ap-south-1"
     echo ""
     echo "Interactive Mode:"
     echo "  Run without arguments to be guided through the setup:"
@@ -307,8 +308,6 @@ show_help() {
     echo "    2. Choose SSL option:"
     echo "       - Let's Encrypt (free, automatic)"
     echo "       - Custom certificate (provide your own files)"
-    echo ""
-    echo "  ECR authentication is handled automatically - no token needed!"
     echo ""
     echo "Non-Interactive Options:"
     echo "  --domain       Domain name for StackBill (e.g., stackbill.example.com)"
@@ -322,13 +321,16 @@ show_help() {
     echo ""
     echo "Examples:"
     echo "  # Interactive (recommended)"
-    echo "  sudo $0"
+    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
+    echo "  sudo -E $0"
     echo ""
     echo "  # With custom certificate"
-    echo "  sudo $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
+    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
+    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
     echo ""
     echo "  # With Let's Encrypt"
-    echo "  sudo $0 --domain example.com --letsencrypt --email admin@example.com"
+    echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
+    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com"
 }
 
 validate_inputs() {
@@ -340,6 +342,20 @@ validate_inputs() {
         exit 1
     fi
     log_info "  Running as root: yes"
+
+    # Check for AWS_ECR_TOKEN
+    if [[ -z "$AWS_ECR_TOKEN" ]]; then
+        log_error "AWS_ECR_TOKEN environment variable is required"
+        echo ""
+        echo "To get an ECR token, run:"
+        echo "  aws ecr get-login-password --region ap-south-1"
+        echo ""
+        echo "Then run the installer with:"
+        echo "  export AWS_ECR_TOKEN=\"<your-token>\""
+        echo "  sudo -E $0 [options]"
+        exit 1
+    fi
+    log_info "  AWS ECR Token: provided (${#AWS_ECR_TOKEN} chars)"
 
     # Domain is always required
     if [[ -z "$DOMAIN" ]]; then
@@ -382,83 +398,6 @@ validate_inputs() {
 get_server_ip() {
     SERVER_IP=$(hostname -I | awk '{print $1}')
     log_info "Server IP: $SERVER_IP"
-}
-
-# ============================================
-# ECR TOKEN FETCH (AWS CLI Method)
-# ============================================
-
-install_aws_cli() {
-    log_step "Installing AWS CLI"
-
-    if command -v aws &>/dev/null; then
-        log_info "AWS CLI already installed: $(aws --version 2>&1 | head -1)"
-        return 0
-    fi
-
-    # Install unzip if not present
-    if ! command -v unzip &>/dev/null; then
-        log_info "Installing unzip..."
-        apt-get update -qq
-        apt-get install -y -qq unzip
-    fi
-
-    log_info "Downloading AWS CLI..."
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-
-    log_info "Installing AWS CLI..."
-    unzip -q /tmp/awscliv2.zip -d /tmp
-    /tmp/aws/install --update
-
-    # Cleanup
-    rm -rf /tmp/aws /tmp/awscliv2.zip
-
-    log_info "AWS CLI installed: $(aws --version 2>&1 | head -1)"
-}
-
-fetch_ecr_token() {
-    log_step "Fetching ECR Authentication Token"
-
-    # Install AWS CLI if needed
-    install_aws_cli
-
-    # Decrypt credentials
-    local _p="sb-ecr-2024-poc-install"
-    local _ak=$(echo "$_EK1" | openssl enc -aes-256-cbc -d -a -pbkdf2 -iter 100000 -pass pass:$_p 2>/dev/null)
-    local _sk=$(echo "$_EK2" | openssl enc -aes-256-cbc -d -a -pbkdf2 -iter 100000 -pass pass:$_p 2>/dev/null)
-
-    if [[ -z "$_ak" || -z "$_sk" ]]; then
-        log_error "Failed to decrypt ECR credentials"
-        exit 1
-    fi
-
-    log_info "Authenticating with AWS ECR..."
-
-    # Set credentials temporarily for AWS CLI
-    export AWS_ACCESS_KEY_ID="$_ak"
-    export AWS_SECRET_ACCESS_KEY="$_sk"
-    export AWS_DEFAULT_REGION="$ECR_REGION"
-
-    # Fetch ECR token
-    set +e
-    AWS_ECR_TOKEN=$(aws ecr get-login-password --region "$ECR_REGION" 2>&1)
-    local exit_code=$?
-    set -e
-
-    # Immediately clear credentials from environment
-    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION
-    _ak=""
-    _sk=""
-    unset _ak _sk _p
-
-    # Verify token was retrieved
-    if [[ $exit_code -ne 0 ]] || [[ -z "$AWS_ECR_TOKEN" ]] || [[ "$AWS_ECR_TOKEN" == *"error"* ]] || [[ "$AWS_ECR_TOKEN" == *"Error"* ]]; then
-        log_error "Failed to fetch ECR token (exit code: $exit_code)"
-        log_error "Response: $AWS_ECR_TOKEN"
-        exit 1
-    fi
-
-    log_info "ECR token fetched successfully (length: ${#AWS_ECR_TOKEN} characters)"
 }
 
 # ============================================
@@ -632,15 +571,15 @@ install_istio() {
 # DATABASES ON HOST
 # ============================================
 
-install_mysql() {
-    log_step "Installing MySQL"
+install_mariadb() {
+    log_step "Installing MariaDB"
 
-    if systemctl is-active --quiet mysql 2>/dev/null; then
-        log_info "MySQL already running"
-        # Update user with native password authentication
+    if systemctl is-active --quiet mariadb 2>/dev/null; then
+        log_info "MariaDB already running"
+        # Update user password if needed
         mysql -u root <<EOF || true
-ALTER USER 'stackbill'@'%' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
-ALTER USER 'stackbill'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
+ALTER USER 'stackbill'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
+ALTER USER 'stackbill'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
@@ -650,18 +589,18 @@ EOF
 
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y -qq mysql-server mysql-client
+    apt-get install -y -qq mariadb-server mariadb-client
 
-    systemctl start mysql
-    systemctl enable mysql
+    systemctl start mariadb
+    systemctl enable mariadb
 
     for i in {1..30}; do
         mysqladmin ping -h localhost --silent 2>/dev/null && break
         sleep 2
     done
 
-    # Configure MySQL for StackBill
-    cat > /etc/mysql/mysql.conf.d/stackbill.cnf <<'MYSQLCONF'
+    # Configure MariaDB for StackBill
+    cat > /etc/mysql/mariadb.conf.d/99-stackbill.cnf <<'MARIACONF'
 [mysqld]
 bind-address = 0.0.0.0
 sql_mode = NO_ENGINE_SUBSTITUTION,STRICT_TRANS_TABLES
@@ -673,21 +612,21 @@ max_connect_errors = 100000
 skip-host-cache
 skip-name-resolve
 log_bin_trust_function_creators = 1
-MYSQLCONF
+MARIACONF
 
-    systemctl restart mysql
+    systemctl restart mariadb
 
     for i in {1..30}; do
         mysqladmin ping -h localhost --silent 2>/dev/null && break
         sleep 2
     done
 
-    # Create databases and users with native password authentication
+    # Create databases and users
     mysql -u root <<EOF
 CREATE DATABASE IF NOT EXISTS stackbill;
 CREATE DATABASE IF NOT EXISTS configuration;
-CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
-CREATE USER IF NOT EXISTS 'stackbill'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_PASSWORD}';
+CREATE USER IF NOT EXISTS 'stackbill'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
+CREATE USER IF NOT EXISTS 'stackbill'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'%' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'stackbill'@'localhost' WITH GRANT OPTION;
 SET GLOBAL log_bin_trust_function_creators = 1;
@@ -695,7 +634,7 @@ SET GLOBAL max_connect_errors = 100000;
 FLUSH PRIVILEGES;
 EOF
 
-    log_info "MySQL installed with StackBill configuration - User: stackbill"
+    log_info "MariaDB installed with StackBill configuration - User: stackbill"
 }
 
 install_mongodb() {
@@ -1115,14 +1054,11 @@ main() {
 
     # Databases on host
     if [[ "$SKIP_DB" != "true" ]]; then
-        install_mysql
+        install_mariadb
         install_mongodb
         install_rabbitmq
         setup_nfs
     fi
-
-    # Fetch ECR token using secure container method
-    fetch_ecr_token
 
     # Deploy StackBill directly
     setup_namespace

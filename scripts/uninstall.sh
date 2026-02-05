@@ -32,7 +32,7 @@ show_help() {
     echo "  -r, --release NAME       Helm release name (default: stackbill)"
     echo "  --delete-pvc             Delete PersistentVolumeClaims"
     echo "  --delete-namespace       Delete the namespace after uninstall"
-    echo "  --delete-db              Stop and remove host databases (MySQL, MongoDB, RabbitMQ)"
+    echo "  --delete-db              Stop and remove host databases (MariaDB, MongoDB, RabbitMQ)"
     echo "  --force                  Skip confirmation prompts"
     echo "  -h, --help               Show this help message"
     echo ""
@@ -131,25 +131,23 @@ delete_host_databases() {
     log_info "Fixing any broken packages..."
     dpkg --configure -a 2>/dev/null || true
 
-    # ==================== MySQL ====================
-    log_info "Removing MySQL..."
+    # ==================== MariaDB ====================
+    log_info "Removing MariaDB..."
 
-    # Stop MySQL if running
-    systemctl stop mysql 2>/dev/null || true
-    systemctl disable mysql 2>/dev/null || true
+    # Stop MariaDB if running
+    systemctl stop mariadb 2>/dev/null || true
+    systemctl disable mariadb 2>/dev/null || true
 
-    # Remove and purge all MySQL packages
+    # Remove and purge all MariaDB packages
     apt-get remove --purge -y \
-        mysql-server \
-        mysql-server-8.0 \
-        mysql-client \
-        mysql-client-8.0 \
-        mysql-common \
-        mysql-server-core-8.0 \
-        mysql-client-core-8.0 \
+        mariadb-server \
+        mariadb-client \
+        mariadb-common \
+        mariadb-server-core \
+        mariadb-client-core \
         2>/dev/null || true
 
-    # Clean up MySQL directories and config
+    # Clean up MariaDB directories and config
     rm -rf /etc/mysql
     rm -rf /var/lib/mysql
     rm -rf /var/log/mysql
@@ -159,7 +157,7 @@ delete_host_databases() {
     rm -f /etc/alternatives/my.cnf
     update-alternatives --remove-all my.cnf 2>/dev/null || true
 
-    log_info "MySQL removed"
+    log_info "MariaDB removed"
 
     # ==================== MongoDB ====================
     log_info "Removing MongoDB..."
@@ -277,6 +275,6 @@ log_info "Uninstall completed!"
 
 if [[ "$DELETE_DB" != "true" ]]; then
     echo ""
-    log_warn "Host databases (MySQL, MongoDB, RabbitMQ) were preserved."
+    log_warn "Host databases (MariaDB, MongoDB, RabbitMQ) were preserved."
     log_warn "To remove them, run: $0 --delete-db --force"
 fi

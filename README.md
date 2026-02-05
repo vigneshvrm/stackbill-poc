@@ -6,12 +6,10 @@ Fully automated single-command deployment for StackBill Cloud Management Portal.
 
 This installer provides a **completely automated POC installation**:
 
-- **User provides**: Domain name + SSL certificate
+- **User provides**: Domain name + SSL certificate + ECR token
 - **Auto-provisioned**: K3s, Istio, MySQL, MongoDB, RabbitMQ, NFS storage, StackBill
 
 **No UI wizard required** - everything is configured automatically.
-
-**ECR authentication is handled automatically** - no manual token required!
 
 ## Requirements
 
@@ -22,30 +20,45 @@ This installer provides a **completely automated POC installation**:
 | RAM | 16GB+ |
 | Storage | 100GB+ |
 | Network | Public IP with ports 80, 443 open |
+| AWS ECR Token | Required for pulling StackBill images |
 
 ## Quick Start
 
-### One-Line Install
+### Step 1: Get ECR Token
+
+You need an AWS ECR token to pull StackBill images. Get it using AWS CLI:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh | sudo bash
+aws ecr get-login-password --region ap-south-1
 ```
 
-### Or Clone and Install
+### Step 2: Run Installer
 
 ```bash
+# Set the ECR token
+export AWS_ECR_TOKEN="<your-ecr-token>"
+
+# Clone and install
 git clone https://github.com/vigneshvrm/stackbill-poc.git
 cd stackbill-poc
-sudo ./scripts/install-stackbill-poc.sh
+sudo -E ./scripts/install-stackbill-poc.sh
 ```
 
-The installer will prompt you for:
-1. **Domain name** - Your StackBill portal domain (e.g., `stackbill.example.com`)
-2. **SSL Certificate** - Choose one:
+Or one-liner (if you already have the token):
+
+```bash
+export AWS_ECR_TOKEN="<your-ecr-token>"
+curl -sfL https://raw.githubusercontent.com/vigneshvrm/stackbill-poc/main/scripts/install-stackbill-poc.sh | sudo -E bash
+```
+
+The installer requires:
+1. **AWS_ECR_TOKEN** - Environment variable with ECR authentication token
+2. **Domain name** - Your StackBill portal domain (e.g., `stackbill.example.com`)
+3. **SSL Certificate** - Choose one:
    - **Let's Encrypt** (recommended) - Free, automatic certificate
    - **Custom Certificate** - Provide your own fullchain.pem and privatekey.pem
 
-That's it! The script will install everything automatically:
+The script will then install everything automatically:
 - K3s Kubernetes cluster
 - Istio service mesh
 - MySQL, MongoDB, RabbitMQ databases
@@ -57,7 +70,7 @@ That's it! The script will install everything automatically:
 |-----------|---------|----------|
 | K3s | v1.29.0 | Kubernetes cluster |
 | Istio | 1.20.3 | Service mesh |
-| MySQL | 8.0 | Host (systemd) |
+| MariaDB | 10.11 | Host (systemd) |
 | MongoDB | 7.0 | Host (systemd) |
 | RabbitMQ | 3.13 | Host (systemd) |
 | NFS | - | Host (/data/stackbill) |
@@ -80,17 +93,20 @@ Run without arguments for interactive mode, or use these options for non-interac
 ### Examples
 
 ```bash
+# First, set the ECR token
+export AWS_ECR_TOKEN="$(aws ecr get-login-password --region ap-south-1)"
+
 # Interactive mode (recommended)
-sudo ./scripts/install-stackbill-poc.sh
+sudo -E ./scripts/install-stackbill-poc.sh
 
 # With Let's Encrypt SSL
-sudo ./scripts/install-stackbill-poc.sh \
+sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --letsencrypt \
     --email admin@example.com
 
 # With custom certificate
-sudo ./scripts/install-stackbill-poc.sh \
+sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --ssl-cert /path/to/fullchain.pem \
     --ssl-key /path/to/privatekey.pem
