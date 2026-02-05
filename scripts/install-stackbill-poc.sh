@@ -331,8 +331,6 @@ parse_args() {
             --ssl-key) SSL_KEY="$2"; shift 2 ;;
             --letsencrypt) SSL_MODE="letsencrypt"; shift ;;
             --email) EMAIL="$2"; shift 2 ;;
-            --cloudstack-existing) CLOUDSTACK_MODE="existing"; shift ;;
-            --cloudstack-simulator) CLOUDSTACK_MODE="simulator"; shift ;;
             --skip-infra) SKIP_INFRA=true; shift ;;
             --skip-db) SKIP_DB=true; shift ;;
             -h|--help) show_help; exit 0 ;;
@@ -365,29 +363,29 @@ show_help() {
     echo "       - Deploy CloudStack Simulator for POC/testing"
     echo ""
     echo "Non-Interactive Options:"
-    echo "  --domain                Domain name for StackBill (e.g., stackbill.example.com)"
-    echo "  --ssl-cert              Path to SSL certificate file (fullchain.pem)"
-    echo "  --ssl-key               Path to SSL private key file (privatekey.pem)"
-    echo "  --letsencrypt           Use Let's Encrypt for SSL (requires --email)"
-    echo "  --email                 Email for Let's Encrypt notifications"
-    echo "  --cloudstack-existing   Use existing CloudStack deployment"
-    echo "  --cloudstack-simulator  Deploy CloudStack Simulator (for POC/testing)"
-    echo "  --skip-infra            Skip K3s/Istio installation (use existing cluster)"
-    echo "  --skip-db               Skip database installation (use existing databases)"
-    echo "  -h, --help              Show this help message"
+    echo "  --domain       Domain name for StackBill (e.g., stackbill.example.com)"
+    echo "  --ssl-cert     Path to SSL certificate file (fullchain.pem)"
+    echo "  --ssl-key      Path to SSL private key file (privatekey.pem)"
+    echo "  --letsencrypt  Use Let's Encrypt for SSL (requires --email)"
+    echo "  --email        Email for Let's Encrypt notifications"
+    echo "  --skip-infra   Skip K3s/Istio installation (use existing cluster)"
+    echo "  --skip-db      Skip database installation (use existing databases)"
+    echo "  -h, --help     Show this help message"
+    echo ""
+    echo "Note: CloudStack configuration is always prompted interactively."
     echo ""
     echo "Examples:"
     echo "  # Interactive (recommended)"
     echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
     echo "  sudo -E $0"
     echo ""
-    echo "  # With custom certificate and CloudStack Simulator"
+    echo "  # With custom certificate (CloudStack will be prompted)"
     echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem --cloudstack-simulator"
+    echo "  sudo -E $0 --domain example.com --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem"
     echo ""
-    echo "  # With Let's Encrypt and existing CloudStack"
+    echo "  # With Let's Encrypt (CloudStack will be prompted)"
     echo "  export AWS_ECR_TOKEN=\"\$(aws ecr get-login-password --region ap-south-1)\""
-    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com --cloudstack-existing"
+    echo "  sudo -E $0 --domain example.com --letsencrypt --email admin@example.com"
 }
 
 validate_inputs() {

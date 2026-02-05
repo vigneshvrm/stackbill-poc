@@ -93,10 +93,10 @@ Run without arguments for interactive mode, or use these options for non-interac
 | `--email` | Email for Let's Encrypt certificate notifications |
 | `--ssl-cert` | Path to custom SSL certificate (fullchain.pem) |
 | `--ssl-key` | Path to custom SSL private key (privatekey.pem) |
-| `--cloudstack-existing` | Use existing CloudStack deployment |
-| `--cloudstack-simulator` | Deploy CloudStack Simulator for POC/testing |
 | `--skip-infra` | Skip K3s/Istio installation |
 | `--skip-db` | Skip database installation |
+
+**Note:** CloudStack configuration is always prompted interactively during installation.
 
 ### Examples
 
@@ -107,19 +107,17 @@ export AWS_ECR_TOKEN="$(aws ecr get-login-password --region ap-south-1)"
 # Interactive mode (recommended)
 sudo -E ./scripts/install-stackbill-poc.sh
 
-# With Let's Encrypt SSL and CloudStack Simulator
+# With Let's Encrypt SSL (CloudStack will be prompted)
 sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --letsencrypt \
-    --email admin@example.com \
-    --cloudstack-simulator
+    --email admin@example.com
 
-# With custom certificate and existing CloudStack
+# With custom certificate (CloudStack will be prompted)
 sudo -E ./scripts/install-stackbill-poc.sh \
     --domain stackbill.example.com \
     --ssl-cert /path/to/fullchain.pem \
-    --ssl-key /path/to/privatekey.pem \
-    --cloudstack-existing
+    --ssl-key /path/to/privatekey.pem
 ```
 
 ## Post-Installation
